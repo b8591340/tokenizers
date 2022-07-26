@@ -31,10 +31,9 @@ fn cache_dir() -> PathBuf {
 /// Returns a directory to be used as cache, creating it if it doesn't exist
 ///
 /// Cf `cache_dir()` to understand how the cache dir is selected.
-fn ensure_cache_dir() -> std::io::Result<PathBuf> {
-    let dir = cache_dir();
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir)
+fn ensure_cache_dir(path: PathBuf) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(&path)?;
+    Ok(path)
 }
 
 /// Sanitize a key or value to be used inside the user_agent
@@ -81,6 +80,7 @@ fn user_agent(additional_info: HashMap<String, String>) -> String {
 /// Defines the aditional parameters available for the `from_pretrained` function
 #[derive(Debug, Clone)]
 pub struct FromPretrainedParameters {
+    pub path: Option<String>,
     pub revision: String,
     pub user_agent: HashMap<String, String>,
     pub auth_token: Option<String>,
@@ -89,6 +89,7 @@ pub struct FromPretrainedParameters {
 impl Default for FromPretrainedParameters {
     fn default() -> Self {
         Self {
+            path: None,
             revision: "main".into(),
             user_agent: HashMap::new(),
             auth_token: None,
@@ -103,7 +104,8 @@ pub fn from_pretrained<S: AsRef<str>>(
     params: Option<FromPretrainedParameters>,
 ) -> Result<PathBuf> {
     let params = params.unwrap_or_default();
-    let cache_dir = ensure_cache_dir()?;
+    let cache_dir =
+        ensure_cache_dir(params.path.map(PathBuf::from).unwrap_or_else(|| cache_dir()))?;
 
     // Build a custom HTTP Client using our user-agent and custom headers
     let mut headers = header::HeaderMap::new();
@@ -113,14 +115,11 @@ pub fn from_pretrained<S: AsRef<str>>(
             header::HeaderValue::from_str(&format!("Bearer {}", token))?,
         );
     }
-    let client_builder = Client::builder()
-        .user_agent(user_agent(params.user_agent))
-        .default_headers(headers);
+    let client_builder =
+        Client::builder().user_agent(user_agent(params.user_agent)).default_headers(headers);
 
     // Create a cache object
-    let cache = CacheBuilder::with_client_builder(client_builder)
-        .dir(cache_dir)
-        .build()?;
+    let cache = CacheBuilder::with_client_builder(client_builder).dir(cache_dir).build()?;
 
     let url_to_download = format!(
         "https://huggingface.co/{}/resolve/{}/tokenizer.json",
