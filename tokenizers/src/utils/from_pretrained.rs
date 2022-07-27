@@ -32,7 +32,9 @@ fn cache_dir() -> PathBuf {
 ///
 /// Cf `cache_dir()` to understand how the cache dir is selected.
 fn ensure_cache_dir(path: PathBuf) -> std::io::Result<PathBuf> {
-    std::fs::create_dir_all(&path)?;
+    if !path.exists() {
+        std::fs::create_dir_all(&path)?;
+    }
     Ok(path)
 }
 
@@ -118,21 +120,27 @@ pub fn from_pretrained<S: AsRef<str>>(
     let client_builder =
         Client::builder().user_agent(user_agent(params.user_agent)).default_headers(headers);
 
-    // Create a cache object
-    let cache = CacheBuilder::with_client_builder(client_builder).dir(cache_dir).build()?;
-
     let url_to_download = format!(
         "https://huggingface.co/{}/resolve/{}/tokenizer.json",
         identifier.as_ref(),
         params.revision,
     );
 
-    match cache.cached_path(&url_to_download) {
-        Err(_) => Err(format!(
+    let tokenizer: String = client_builder
+        .build()
+        .unwrap()
+        .get(url_to_download)
+        .send()
+        .expect(&format!(
             "Model \"{}\" on the Hub doesn't have a tokenizer",
-            identifier.as_ref()
-        )
-        .into()),
-        Ok(path) => Ok(path),
-    }
+            identifier.as_ref(),
+        ))
+        .text()
+        .unwrap();
+
+    let path = cache_dir.as_path().join("tokenizer");
+
+    std::fs::write(&path, tokenizer).unwrap();
+
+    Ok(path)
 }
