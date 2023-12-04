@@ -63,9 +63,7 @@ class BertNormalizer(Normalizer):
             Whether to lowercase.
     """
 
-    def __init__(
-        self, clean_text=True, handle_chinese_chars=True, strip_accents=None, lowercase=True
-    ):
+    def __init__(self, clean_text=True, handle_chinese_chars=True, strip_accents=None, lowercase=True):
         pass
     def normalize(self, normalized):
         """
@@ -347,6 +345,46 @@ class Precompiled(Normalizer):
     """
 
     def __init__(self, precompiled_charsmap):
+        pass
+    def normalize(self, normalized):
+        """
+        Normalize a :class:`~tokenizers.NormalizedString` in-place
+
+        This method allows to modify a :class:`~tokenizers.NormalizedString` to
+        keep track of the alignment information. If you just want to see the result
+        of the normalization on a raw string, you can use
+        :meth:`~tokenizers.normalizers.Normalizer.normalize_str`
+
+        Args:
+            normalized (:class:`~tokenizers.NormalizedString`):
+                The normalized string on which to apply this
+                :class:`~tokenizers.normalizers.Normalizer`
+        """
+        pass
+    def normalize_str(self, sequence):
+        """
+        Normalize the given string
+
+        This method provides a way to visualize the effect of a
+        :class:`~tokenizers.normalizers.Normalizer` but it does not keep track of the alignment
+        information. If you need to get/convert offsets, you can use
+        :meth:`~tokenizers.normalizers.Normalizer.normalize`
+
+        Args:
+            sequence (:obj:`str`):
+                A string to normalize
+
+        Returns:
+            :obj:`str`: A string after normalization
+        """
+        pass
+
+class Prepend(Normalizer):
+    """
+    Prepend normalizer
+    """
+
+    def __init__(self, prepend):
         pass
     def normalize(self, normalized):
         """

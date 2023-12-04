@@ -42,7 +42,7 @@ lazy_static! {
         bytes_char().into_iter().map(|(c, b)| (b, c)).collect();
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 /// Provides all the necessary steps to handle the BPE tokenization at the byte-level. Takes care
 /// of all the required processing steps to transform a UTF-8 string as needed before and after the
 /// BPE model does its job.
@@ -135,10 +135,10 @@ impl PreTokenizer for ByteLevel {
                     bytes
                         .iter()
                         .enumerate()
-                        .map(|(i, b)| (BYTES_CHAR[b], if i > 0 { 1 } else { 0 })),
+                        .map(|(i, b)| (BYTES_CHAR[b], isize::from(i > 0))),
                 );
             }
-            normalized.transform(transformations.into_iter(), 0);
+            normalized.transform(transformations, 0);
             Ok(())
         })
     }
@@ -174,20 +174,13 @@ impl PostProcessor for ByteLevel {
         0
     }
 
-    fn process(
+    fn process_encodings(
         &self,
-        mut encoding: Encoding,
-        mut pair_encoding: Option<Encoding>,
-        add_special_tokens: bool,
-    ) -> Result<Encoding> {
+        mut encodings: Vec<Encoding>,
+        _add_special_tokens: bool,
+    ) -> Result<Vec<Encoding>> {
         if self.trim_offsets {
-            process_offsets(&mut encoding, self.add_prefix_space);
-            encoding
-                .get_overflowing_mut()
-                .iter_mut()
-                .for_each(|encoding| process_offsets(encoding, self.add_prefix_space));
-
-            if let Some(encoding) = pair_encoding.as_mut() {
+            for encoding in encodings.iter_mut() {
                 process_offsets(encoding, self.add_prefix_space);
                 encoding
                     .get_overflowing_mut()
@@ -195,13 +188,16 @@ impl PostProcessor for ByteLevel {
                     .for_each(|encoding| process_offsets(encoding, self.add_prefix_space));
             }
         }
-
-        <dyn PostProcessor>::default_process(encoding, pair_encoding, add_special_tokens)
+        for (i, encoding) in encodings.iter_mut().enumerate() {
+            encoding.set_sequence_id(i);
+        }
+        Ok(encodings)
+        //<dyn PostProcessor>::default_process(encodings, add_special_tokens)
     }
 }
 
 pub fn process_offsets(encoding: &mut Encoding, add_prefix_space: bool) {
-    encoding.process_tokens_with_offsets_mut(|(i, (token, mut offsets))| {
+    encoding.process_tokens_with_offsets_mut(|(i, (token, offsets))| {
         let mut leading_spaces = token
             .chars()
             .take_while(|c| *c == BYTES_CHAR[&b' '] || c.is_whitespace())
@@ -488,7 +484,7 @@ mod tests {
         );
         let expected = Encoding::new(
             vec![0; 5],
-            vec![],
+            vec![0; 5],
             vec![
                 "Ġ".into(),
                 "ĠĠĠĠHelloĠĠ".into(),
@@ -501,7 +497,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
-            HashMap::new(),
+            HashMap::from_iter(vec![(0, 0..5)]),
         );
 
         let bytelevel = ByteLevel::default().trim_offsets(true);
@@ -510,10 +506,15 @@ mod tests {
             bytelevel.process(start.clone(), None, false).unwrap()
         );
 
-        let mut pair_expected = Encoding::new(
-            vec![0; 5],
-            vec![],
+        let pair_expected = Encoding::new(
+            vec![0; 10],
+            vec![0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
             vec![
+                "Ġ".into(),
+                "ĠĠĠĠHelloĠĠ".into(),
+                "ĠĠHello".into(),
+                "HelloĠĠ".into(),
+                "ĠĠĠĠ".into(),
                 "Ġ".into(),
                 "ĠĠĠĠHelloĠĠ".into(),
                 "ĠĠHello".into(),
@@ -521,13 +522,23 @@ mod tests {
                 "ĠĠĠĠ".into(),
             ],
             vec![],
-            vec![(0, 0), (4, 9), (13, 18), (18, 23), (29, 29)],
+            vec![
+                (0, 0),
+                (4, 9),
+                (13, 18),
+                (18, 23),
+                (29, 29),
+                (0, 0),
+                (4, 9),
+                (13, 18),
+                (18, 23),
+                (29, 29),
+            ],
             vec![],
             vec![],
             vec![],
             HashMap::from_iter(vec![(0, 0..5), (1, 5..10)]),
         );
-        pair_expected.merge_with(expected, false);
         assert_eq!(
             pair_expected,
             bytelevel

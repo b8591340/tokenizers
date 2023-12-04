@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 use numpy::{npyffi, PyArray1};
 use pyo3::class::basic::CompareOp;
 use pyo3::exceptions;
+use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::*;
 use pyo3::AsPyPointer;
@@ -24,6 +25,7 @@ use super::pre_tokenizers::PyPreTokenizer;
 use super::trainers::PyTrainer;
 use crate::processors::PyPostProcessor;
 use crate::utils::{MaybeSizedIterator, PyBufferedIterator};
+use std::collections::BTreeMap;
 
 /// Represents a token that can be be added to a :class:`~tokenizers.Tokenizer`.
 /// It can have special options that defines the way it should behave.
@@ -54,24 +56,23 @@ use crate::utils::{MaybeSizedIterator, PyBufferedIterator};
 ///         text. For example, with the added token ``"yesterday"``, and a normalizer in charge of
 ///         lowercasing the text, the token could be extract from the input ``"I saw a lion
 ///         Yesterday"``.
+///     special (:obj:`bool`, defaults to :obj:`False` with :meth:`~tokenizers.Tokenizer.add_tokens` and :obj:`False` with :meth:`~tokenizers.Tokenizer.add_special_tokens`):
+///         Defines whether this token should be skipped when decoding.
 ///
 #[pyclass(dict, module = "tokenizers", name = "AddedToken")]
-#[pyo3(
-    text_signature = "(self, content, single_word=False, lstrip=False, rstrip=False, normalized=True)"
-)]
 pub struct PyAddedToken {
     pub content: String,
-    pub is_special_token: bool,
+    pub special: bool,
     pub single_word: Option<bool>,
     pub lstrip: Option<bool>,
     pub rstrip: Option<bool>,
     pub normalized: Option<bool>,
 }
 impl PyAddedToken {
-    pub fn from<S: Into<String>>(content: S, is_special_token: Option<bool>) -> Self {
+    pub fn from<S: Into<String>>(content: S, special: Option<bool>) -> Self {
         Self {
             content: content.into(),
-            is_special_token: is_special_token.unwrap_or(false),
+            special: special.unwrap_or(false),
             single_word: None,
             lstrip: None,
             rstrip: None,
@@ -80,7 +81,7 @@ impl PyAddedToken {
     }
 
     pub fn get_token(&self) -> tk::tokenizer::AddedToken {
-        let mut token = tk::AddedToken::from(&self.content, self.is_special_token);
+        let mut token = tk::AddedToken::from(&self.content, self.special);
 
         if let Some(sw) = self.single_word {
             token = token.single_word(sw);
@@ -107,6 +108,7 @@ impl PyAddedToken {
         dict.set_item("lstrip", token.lstrip)?;
         dict.set_item("rstrip", token.rstrip)?;
         dict.set_item("normalized", token.normalized)?;
+        dict.set_item("special", token.special)?;
 
         Ok(dict)
     }
@@ -120,7 +122,7 @@ impl From<tk::AddedToken> for PyAddedToken {
             lstrip: Some(token.lstrip),
             rstrip: Some(token.rstrip),
             normalized: Some(token.normalized),
-            is_special_token: !token.normalized,
+            special: token.special,
         }
     }
 }
@@ -128,7 +130,7 @@ impl From<tk::AddedToken> for PyAddedToken {
 #[pymethods]
 impl PyAddedToken {
     #[new]
-    #[args(kwargs = "**")]
+    #[pyo3(signature = (content=None, **kwargs), text_signature = "(self, content, single_word=False, lstrip=False, rstrip=False, normalized=True, special=False)")]
     fn __new__(content: Option<&str>, kwargs: Option<&PyDict>) -> PyResult<Self> {
         let mut token = PyAddedToken::from(content.unwrap_or(""), None);
 
@@ -140,6 +142,7 @@ impl PyAddedToken {
                     "lstrip" => token.lstrip = Some(value.extract()?),
                     "rstrip" => token.rstrip = Some(value.extract()?),
                     "normalized" => token.normalized = Some(value.extract()?),
+                    "special" => token.special = value.extract()?,
                     _ => println!("Ignored unknown kwarg option {}", key),
                 }
             }
@@ -163,6 +166,7 @@ impl PyAddedToken {
                         "lstrip" => self.lstrip = Some(value.extract()?),
                         "rstrip" => self.rstrip = Some(value.extract()?),
                         "normalized" => self.normalized = Some(value.extract()?),
+                        "special" => self.special = value.extract()?,
                         _ => {}
                     }
                 }
@@ -176,6 +180,12 @@ impl PyAddedToken {
     #[getter]
     fn get_content(&self) -> &str {
         &self.content
+    }
+
+    /// Set the content of this :obj:`AddedToken`
+    #[setter]
+    fn set_content(&mut self, content: String) {
+        self.content = content;
     }
 
     /// Get the value of the :obj:`rstrip` option
@@ -201,6 +211,17 @@ impl PyAddedToken {
     fn get_normalized(&self) -> bool {
         self.get_token().normalized
     }
+    /// Get the value of the :obj:`special` option
+    #[getter]
+    fn get_special(&self) -> bool {
+        self.get_token().special
+    }
+
+    /// Set the value of the :obj:`special` option
+    #[setter]
+    fn set_special(&mut self, special: bool) {
+        self.special = special;
+    }
 
     fn __str__(&self) -> PyResult<&str> {
         Ok(&self.content)
@@ -214,12 +235,13 @@ impl PyAddedToken {
 
         let token = self.get_token();
         Ok(format!(
-            "AddedToken(\"{}\", rstrip={}, lstrip={}, single_word={}, normalized={})",
+            "AddedToken(\"{}\", rstrip={}, lstrip={}, single_word={}, normalized={}, special={})",
             self.content,
             bool_to_python(token.rstrip),
             bool_to_python(token.lstrip),
             bool_to_python(token.single_word),
-            bool_to_python(token.normalized)
+            bool_to_python(token.normalized),
+            bool_to_python(token.special)
         ))
     }
 
@@ -308,7 +330,7 @@ impl FromPyObject<'_> for PyArrayUnicode {
                     );
                     let py = ob.py();
                     let obj = PyObject::from_owned_ptr(py, unicode);
-                    let s = obj.cast_as::<PyString>(py)?;
+                    let s = obj.downcast::<PyString>(py)?;
                     Ok(s.to_string_lossy().trim_matches(char::from(0)).to_owned())
                 })
                 .collect::<PyResult<Vec<_>>>()?;
@@ -332,7 +354,7 @@ impl FromPyObject<'_> for PyArrayStr {
             .as_array()
             .iter()
             .map(|obj| {
-                let s = obj.cast_as::<PyString>(ob.py())?;
+                let s = obj.downcast::<PyString>(ob.py())?;
                 Ok(s.to_string_lossy().into_owned())
             })
             .collect::<PyResult<Vec<_>>>()?;
@@ -441,7 +463,6 @@ type Tokenizer = TokenizerImpl<PyModel, PyNormalizer, PyPreTokenizer, PyPostProc
 ///         The core algorithm that this :obj:`Tokenizer` should be using.
 ///
 #[pyclass(dict, module = "tokenizers", name = "Tokenizer")]
-#[pyo3(text_signature = "(self, model)")]
 #[derive(Clone)]
 pub struct PyTokenizer {
     tokenizer: Tokenizer,
@@ -460,6 +481,7 @@ impl PyTokenizer {
 #[pymethods]
 impl PyTokenizer {
     #[new]
+    #[pyo3(text_signature = "(self, model)")]
     fn __new__(model: PyRef<PyModel>) -> Self {
         PyTokenizer::from_model(model.clone())
     }
@@ -562,24 +584,30 @@ impl PyTokenizer {
     /// Returns:
     ///     :class:`~tokenizers.Tokenizer`: The new tokenizer
     #[staticmethod]
-    #[args(revision = "String::from(\"main\")", auth_token = "None")]
+    #[pyo3(signature = (identifier, revision = String::from("main"), auth_token = None))]
     #[pyo3(text_signature = "(identifier, revision=\"main\", auth_token=None)")]
     fn from_pretrained(
         identifier: &str,
         revision: String,
         auth_token: Option<String>,
     ) -> PyResult<Self> {
-        let params = tk::FromPretrainedParameters {
-            revision,
-            auth_token,
-            user_agent: [("bindings", "Python"), ("version", crate::VERSION)]
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-        };
+        let path = Python::with_gil(|py| -> PyResult<String> {
+            let huggingface_hub = PyModule::import(py, intern!(py, "huggingface_hub"))?;
+            let hf_hub_download = huggingface_hub.getattr(intern!(py, "hf_hub_download"))?;
+            let kwargs = [
+                (intern!(py, "repo_id"), identifier),
+                (intern!(py, "filename"), "tokenizer.json"),
+                (intern!(py, "revision"), &revision),
+            ]
+            .into_py_dict(py);
+            if let Some(auth_token) = auth_token {
+                kwargs.set_item(intern!(py, "token"), auth_token)?;
+            }
+            let path: String = hf_hub_download.call((), Some(kwargs))?.extract()?;
+            Ok(path)
+        })?;
 
-        let tokenizer: PyResult<_> =
-            ToPyResult(Tokenizer::from_pretrained(identifier, Some(params))).into();
+        let tokenizer: PyResult<_> = ToPyResult(Tokenizer::from_file(path)).into();
         Ok(Self::new(tokenizer?))
     }
 
@@ -591,7 +619,7 @@ impl PyTokenizer {
     ///
     /// Returns:
     ///     :obj:`str`: A string representing the serialized Tokenizer
-    #[args(pretty = false)]
+    #[pyo3(signature = (pretty = false))]
     #[pyo3(text_signature = "(self, pretty=False)")]
     fn to_str(&self, pretty: bool) -> PyResult<String> {
         ToPyResult(self.tokenizer.to_string(pretty)).into()
@@ -605,7 +633,7 @@ impl PyTokenizer {
     ///
     ///     pretty (:obj:`bool`, defaults to :obj:`True`):
     ///         Whether the JSON file should be pretty formatted.
-    #[args(pretty = true)]
+    #[pyo3(signature = (path, pretty = true))]
     #[pyo3(text_signature = "(self, path, pretty=True)")]
     fn save(&self, path: &str, pretty: bool) -> PyResult<()> {
         ToPyResult(self.tokenizer.save(path, pretty)).into()
@@ -629,10 +657,26 @@ impl PyTokenizer {
     ///
     /// Returns:
     ///     :obj:`Dict[str, int]`: The vocabulary
-    #[args(with_added_tokens = true)]
+    #[pyo3(signature = (with_added_tokens = true))]
     #[pyo3(text_signature = "(self, with_added_tokens=True)")]
     fn get_vocab(&self, with_added_tokens: bool) -> HashMap<String, u32> {
         self.tokenizer.get_vocab(with_added_tokens)
+    }
+
+    /// Get the underlying vocabulary
+    ///
+    /// Returns:
+    ///     :obj:`Dict[int, AddedToken]`: The vocabulary
+    #[pyo3(signature = ())]
+    #[pyo3(text_signature = "(self)")]
+    fn get_added_tokens_decoder(&self) -> BTreeMap<u32, PyAddedToken> {
+        let mut sorted_map = BTreeMap::new();
+
+        for (key, value) in self.tokenizer.get_added_tokens_decoder() {
+            sorted_map.insert(key, value.into());
+        }
+
+        sorted_map
     }
 
     /// Get the size of the underlying vocabulary
@@ -643,7 +687,7 @@ impl PyTokenizer {
     ///
     /// Returns:
     ///     :obj:`int`: The size of the vocabulary
-    #[args(with_added_tokens = true)]
+    #[pyo3(signature = (with_added_tokens = true))]
     #[pyo3(text_signature = "(self, with_added_tokens=True)")]
     fn get_vocab_size(&self, with_added_tokens: bool) -> usize {
         self.tokenizer.get_vocab_size(with_added_tokens)
@@ -665,7 +709,7 @@ impl PyTokenizer {
     ///
     ///     direction (:obj:`str`, defaults to :obj:`right`):
     ///         Truncate direction
-    #[args(kwargs = "**")]
+    #[pyo3(signature = (max_length, **kwargs))]
     #[pyo3(
         text_signature = "(self, max_length, stride=0, strategy='longest_first', direction='right')"
     )]
@@ -712,15 +756,18 @@ impl PyTokenizer {
             }
         }
 
-        self.tokenizer.with_truncation(Some(params));
-
+        if let Err(error_message) = self.tokenizer.with_truncation(Some(params)) {
+            return Err(PyError(error_message.to_string()).into_pyerr::<exceptions::PyValueError>());
+        }
         Ok(())
     }
 
     /// Disable truncation
     #[pyo3(text_signature = "(self)")]
     fn no_truncation(&mut self) {
-        self.tokenizer.with_truncation(None);
+        self.tokenizer
+            .with_truncation(None)
+            .expect("Failed to set truncation to `None`! This should never happen");
     }
 
     /// Get the currently set truncation parameters
@@ -767,7 +814,7 @@ impl PyTokenizer {
     ///     length (:obj:`int`, `optional`):
     ///         If specified, the length at which to pad. If not specified we pad using the size of
     ///         the longest sequence in a batch.
-    #[args(kwargs = "**")]
+    #[pyo3(signature = (**kwargs))]
     #[pyo3(
         text_signature = "(self, direction='right', pad_id=0, pad_type_id=0, pad_token='[PAD]', length=None, pad_to_multiple_of=None)"
     )]
@@ -896,7 +943,7 @@ impl PyTokenizer {
     /// Returns:
     ///     :class:`~tokenizers.Encoding`: The encoded result
     ///
-    #[args(pair = "None", is_pretokenized = "false", add_special_tokens = "true")]
+    #[pyo3(signature = (sequence, pair = None, is_pretokenized = false, add_special_tokens = true))]
     #[pyo3(
         text_signature = "(self, sequence, pair=None, is_pretokenized=False, add_special_tokens=True)"
     )]
@@ -963,10 +1010,11 @@ impl PyTokenizer {
     /// Returns:
     ///     A :obj:`List` of :class:`~tokenizers.Encoding`: The encoded batch
     ///
-    #[args(is_pretokenized = "false", add_special_tokens = "true")]
+    #[pyo3(signature = (input, is_pretokenized = false, add_special_tokens = true))]
     #[pyo3(text_signature = "(self, input, is_pretokenized=False, add_special_tokens=True)")]
     fn encode_batch(
         &self,
+        py: Python<'_>,
         input: Vec<&PyAny>,
         is_pretokenized: bool,
         add_special_tokens: bool,
@@ -982,8 +1030,7 @@ impl PyTokenizer {
                 Ok(input)
             })
             .collect::<PyResult<Vec<tk::EncodeInput>>>()?;
-        let gil = Python::acquire_gil();
-        gil.python().allow_threads(|| {
+        py.allow_threads(|| {
             ToPyResult(
                 self.tokenizer
                     .encode_batch_char_offsets(input, add_special_tokens)
@@ -1006,10 +1053,10 @@ impl PyTokenizer {
     ///
     /// Returns:
     ///     :obj:`str`: The decoded string
-    #[args(skip_special_tokens = true)]
+    #[pyo3(signature = (ids, skip_special_tokens = true))]
     #[pyo3(text_signature = "(self, ids, skip_special_tokens=True)")]
     fn decode(&self, ids: Vec<u32>, skip_special_tokens: bool) -> PyResult<String> {
-        ToPyResult(self.tokenizer.decode(ids, skip_special_tokens)).into()
+        ToPyResult(self.tokenizer.decode(&ids, skip_special_tokens)).into()
     }
 
     /// Decode a batch of ids back to their corresponding string
@@ -1023,16 +1070,17 @@ impl PyTokenizer {
     ///
     /// Returns:
     ///     :obj:`List[str]`: A list of decoded strings
-    #[args(skip_special_tokens = true)]
+    #[pyo3(signature = (sequences, skip_special_tokens = true))]
     #[pyo3(text_signature = "(self, sequences, skip_special_tokens=True)")]
     fn decode_batch(
         &self,
+        py: Python<'_>,
         sequences: Vec<Vec<u32>>,
         skip_special_tokens: bool,
     ) -> PyResult<Vec<String>> {
-        let gil = Python::acquire_gil();
-        gil.python().allow_threads(|| {
-            ToPyResult(self.tokenizer.decode_batch(sequences, skip_special_tokens)).into()
+        py.allow_threads(|| {
+            let slices = sequences.iter().map(|v| &v[..]).collect::<Vec<&[u32]>>();
+            ToPyResult(self.tokenizer.decode_batch(&slices, skip_special_tokens)).into()
         })
     }
 
@@ -1082,7 +1130,7 @@ impl PyTokenizer {
                 if let Ok(content) = token.extract::<String>() {
                     Ok(PyAddedToken::from(content, Some(false)).get_token())
                 } else if let Ok(mut token) = token.extract::<PyRefMut<PyAddedToken>>() {
-                    token.is_special_token = false;
+                    token.special = false;
                     Ok(token.get_token())
                 } else {
                     Err(exceptions::PyTypeError::new_err(
@@ -1119,7 +1167,7 @@ impl PyTokenizer {
                 if let Ok(content) = token.extract::<String>() {
                     Ok(tk::tokenizer::AddedToken::from(content, true))
                 } else if let Ok(mut token) = token.extract::<PyRefMut<PyAddedToken>>() {
-                    token.is_special_token = true;
+                    token.special = true;
                     Ok(token.get_token())
                 } else {
                     Err(exceptions::PyTypeError::new_err(
@@ -1144,7 +1192,7 @@ impl PyTokenizer {
     ///
     ///     trainer (:obj:`~tokenizers.trainers.Trainer`, `optional`):
     ///         An optional trainer that should be used to train our Model
-    #[args(trainer = "None")]
+    #[pyo3(signature = (files, trainer = None))]
     #[pyo3(text_signature = "(self, files, trainer = None)")]
     fn train(&mut self, files: Vec<String>, trainer: Option<&mut PyTrainer>) -> PyResult<()> {
         let mut trainer =
@@ -1180,7 +1228,7 @@ impl PyTokenizer {
     ///     length (:obj:`int`, `optional`):
     ///         The total number of sequences in the iterator. This is used to
     ///         provide meaningful progress tracking
-    #[args(trainer = "None", length = "None")]
+    #[pyo3(signature = (iterator, trainer = None, length = None))]
     #[pyo3(text_signature = "(self, iterator, trainer=None, length=None)")]
     fn train_from_iterator(
         &mut self,
@@ -1246,7 +1294,7 @@ impl PyTokenizer {
     ///
     /// Returns:
     ///     :class:`~tokenizers.Encoding`: The final post-processed encoding
-    #[args(pair = "None", add_special_tokens = true)]
+    #[pyo3(signature = (encoding, pair = None, add_special_tokens = true))]
     #[pyo3(text_signature = "(self, encoding, pair=None, add_special_tokens=True)")]
     fn post_process(
         &self,
@@ -1268,8 +1316,8 @@ impl PyTokenizer {
 
     /// The :class:`~tokenizers.models.Model` in use by the Tokenizer
     #[getter]
-    fn get_model(&self) -> PyResult<PyObject> {
-        self.tokenizer.get_model().get_as_subtype()
+    fn get_model(&self, py: Python<'_>) -> PyResult<PyObject> {
+        self.tokenizer.get_model().get_as_subtype(py)
     }
 
     /// Set the :class:`~tokenizers.models.Model`
@@ -1280,11 +1328,11 @@ impl PyTokenizer {
 
     /// The `optional` :class:`~tokenizers.normalizers.Normalizer` in use by the Tokenizer
     #[getter]
-    fn get_normalizer(&self) -> PyResult<PyObject> {
+    fn get_normalizer(&self, py: Python<'_>) -> PyResult<PyObject> {
         if let Some(n) = self.tokenizer.get_normalizer() {
-            n.get_as_subtype()
+            n.get_as_subtype(py)
         } else {
-            Ok(Python::acquire_gil().python().None())
+            Ok(py.None())
         }
     }
 
@@ -1296,11 +1344,11 @@ impl PyTokenizer {
 
     /// The `optional` :class:`~tokenizers.pre_tokenizers.PreTokenizer` in use by the Tokenizer
     #[getter]
-    fn get_pre_tokenizer(&self) -> PyResult<PyObject> {
+    fn get_pre_tokenizer(&self, py: Python<'_>) -> PyResult<PyObject> {
         if let Some(pt) = self.tokenizer.get_pre_tokenizer() {
-            pt.get_as_subtype()
+            pt.get_as_subtype(py)
         } else {
-            Ok(Python::acquire_gil().python().None())
+            Ok(py.None())
         }
     }
 
@@ -1312,11 +1360,11 @@ impl PyTokenizer {
 
     /// The `optional` :class:`~tokenizers.processors.PostProcessor` in use by the Tokenizer
     #[getter]
-    fn get_post_processor(&self) -> PyResult<PyObject> {
+    fn get_post_processor(&self, py: Python<'_>) -> PyResult<PyObject> {
         if let Some(n) = self.tokenizer.get_post_processor() {
-            n.get_as_subtype()
+            n.get_as_subtype(py)
         } else {
-            Ok(Python::acquire_gil().python().None())
+            Ok(py.None())
         }
     }
 
@@ -1328,11 +1376,11 @@ impl PyTokenizer {
 
     /// The `optional` :class:`~tokenizers.decoders.Decoder` in use by the Tokenizer
     #[getter]
-    fn get_decoder(&self) -> PyResult<PyObject> {
+    fn get_decoder(&self, py: Python<'_>) -> PyResult<PyObject> {
         if let Some(dec) = self.tokenizer.get_decoder() {
-            dec.get_as_subtype()
+            dec.get_as_subtype(py)
         } else {
-            Ok(Python::acquire_gil().python().None())
+            Ok(py.None())
         }
     }
 

@@ -1,10 +1,11 @@
-from tokenizers import Tokenizer, AddedToken, pre_tokenizers, decoders, trainers, normalizers, Regex
-import os
-from tokenizers.models import Unigram
 import json
-from .base_tokenizer import BaseTokenizer
+import os
+from typing import Iterator, List, Optional, Union, Tuple
 
-from typing import Optional, List, Union, Iterator
+from tokenizers import AddedToken, Regex, Tokenizer, decoders, normalizers, pre_tokenizers, trainers
+from tokenizers.models import Unigram
+
+from .base_tokenizer import BaseTokenizer
 
 
 class SentencePieceUnigramTokenizer(BaseTokenizer):
@@ -15,7 +16,7 @@ class SentencePieceUnigramTokenizer(BaseTokenizer):
 
     def __init__(
         self,
-        vocab: Optional[str] = None,
+        vocab: Optional[List[Tuple[str, float]]] = None,
         replacement: str = "▁",
         add_prefix_space: bool = True,
     ):
@@ -28,12 +29,8 @@ class SentencePieceUnigramTokenizer(BaseTokenizer):
         tokenizer.normalizer = normalizers.Sequence(
             [normalizers.Nmt(), normalizers.NFKC(), normalizers.Replace(Regex(" {2,}"), " ")]
         )
-        tokenizer.pre_tokenizer = pre_tokenizers.Metaspace(
-            replacement=replacement, add_prefix_space=add_prefix_space
-        )
-        tokenizer.decoder = decoders.Metaspace(
-            replacement=replacement, add_prefix_space=add_prefix_space
-        )
+        tokenizer.pre_tokenizer = pre_tokenizers.Metaspace(replacement=replacement, add_prefix_space=add_prefix_space)
+        tokenizer.decoder = decoders.Metaspace(replacement=replacement, add_prefix_space=add_prefix_space)
 
         parameters = {
             "model": "SentencePieceUnigram",
@@ -165,6 +162,7 @@ class SentencePieceUnigramTokenizer(BaseTokenizer):
         vocab = [(piece.piece, piece.score) for piece in m.pieces]
         unk_id = m.trainer_spec.unk_id
         model_type = m.trainer_spec.model_type
+        byte_fallback = m.trainer_spec.byte_fallback
         if model_type != 1:
             raise Exception(
                 "You're trying to run a `Unigram` model but you're file was trained with a different algorithm"
@@ -173,20 +171,19 @@ class SentencePieceUnigramTokenizer(BaseTokenizer):
         replacement = "▁"
         add_prefix_space = True
 
-        tokenizer = Tokenizer(Unigram(vocab, unk_id))
+        tokenizer = Tokenizer(Unigram(vocab, unk_id, byte_fallback))
 
-        tokenizer.normalizer = normalizers.Sequence(
-            [
-                normalizers.Precompiled(precompiled_charsmap),
-                normalizers.Replace(Regex(" {2,}"), " "),
-            ]
-        )
-        tokenizer.pre_tokenizer = pre_tokenizers.Metaspace(
-            replacement=replacement, add_prefix_space=add_prefix_space
-        )
-        tokenizer.decoder = decoders.Metaspace(
-            replacement=replacement, add_prefix_space=add_prefix_space
-        )
+        if precompiled_charsmap:
+            tokenizer.normalizer = normalizers.Sequence(
+                [
+                    normalizers.Precompiled(precompiled_charsmap),
+                    normalizers.Replace(Regex(" {2,}"), " "),
+                ]
+            )
+        else:
+            tokenizer.normalizer = normalizers.Sequence([normalizers.Replace(Regex(" {2,}"), " ")])
+        tokenizer.pre_tokenizer = pre_tokenizers.Metaspace(replacement=replacement, add_prefix_space=add_prefix_space)
+        tokenizer.decoder = decoders.Metaspace(replacement=replacement, add_prefix_space=add_prefix_space)
 
         parameters = {
             "model": "SentencePieceUnigram",

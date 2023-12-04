@@ -1,9 +1,10 @@
 import pickle
+
 import pytest
 
-from tokenizers import Tokenizer, NormalizedString
+from tokenizers import NormalizedString, Tokenizer
 from tokenizers.models import BPE
-from tokenizers.normalizers import Normalizer, BertNormalizer, Sequence, Lowercase, Strip
+from tokenizers.normalizers import BertNormalizer, Lowercase, Normalizer, Sequence, Strip, Prepend
 
 
 class TestBertNormalizer:
@@ -13,41 +14,31 @@ class TestBertNormalizer:
         assert isinstance(pickle.loads(pickle.dumps(BertNormalizer())), BertNormalizer)
 
     def test_strip_accents(self):
-        normalizer = BertNormalizer(
-            strip_accents=True, lowercase=False, handle_chinese_chars=False, clean_text=False
-        )
+        normalizer = BertNormalizer(strip_accents=True, lowercase=False, handle_chinese_chars=False, clean_text=False)
 
         output = normalizer.normalize_str("Héllò")
         assert output == "Hello"
 
     def test_handle_chinese_chars(self):
-        normalizer = BertNormalizer(
-            strip_accents=False, lowercase=False, handle_chinese_chars=True, clean_text=False
-        )
+        normalizer = BertNormalizer(strip_accents=False, lowercase=False, handle_chinese_chars=True, clean_text=False)
 
         output = normalizer.normalize_str("你好")
         assert output == " 你  好 "
 
     def test_clean_text(self):
-        normalizer = BertNormalizer(
-            strip_accents=False, lowercase=False, handle_chinese_chars=False, clean_text=True
-        )
+        normalizer = BertNormalizer(strip_accents=False, lowercase=False, handle_chinese_chars=False, clean_text=True)
 
         output = normalizer.normalize_str("\ufeffHello")
         assert output == "Hello"
 
     def test_lowercase(self):
-        normalizer = BertNormalizer(
-            strip_accents=False, lowercase=True, handle_chinese_chars=False, clean_text=False
-        )
+        normalizer = BertNormalizer(strip_accents=False, lowercase=True, handle_chinese_chars=False, clean_text=False)
 
         output = normalizer.normalize_str("Héllò")
         assert output == "héllò"
 
     def test_can_modify(self):
-        normalizer = BertNormalizer(
-            clean_text=True, handle_chinese_chars=True, strip_accents=True, lowercase=True
-        )
+        normalizer = BertNormalizer(clean_text=True, handle_chinese_chars=True, strip_accents=True, lowercase=True)
 
         assert normalizer.clean_text == True
         assert normalizer.handle_chinese_chars == True
@@ -128,6 +119,28 @@ class TestStrip:
         assert normalizer.right == False
 
 
+class TestPrepend:
+    def test_instantiate(self):
+        assert isinstance(Prepend("▁"), Normalizer)
+        assert isinstance(Prepend("▁"), Prepend)
+        assert isinstance(pickle.loads(pickle.dumps(Prepend("▁"))), Prepend)
+
+    def test_prepend(self):
+        normalizer = Prepend(prepend="▁")
+
+        output = normalizer.normalize_str("hello")
+        assert output == "▁hello"
+
+    def test_can_modify(self):
+        normalizer = Prepend("▁")
+
+        assert normalizer.prepend == "▁"
+
+        # Modify these
+        normalizer.prepend = "-"
+        assert normalizer.prepend == "-"
+
+
 class TestCustomNormalizer:
     class BadCustomNormalizer:
         def normalize(self, normalized, wrong):
@@ -151,9 +164,7 @@ class TestCustomNormalizer:
         with pytest.raises(Exception, match="TypeError:.*normalize()"):
             bad.normalize_str("Hey there!")
         assert good.normalize_str("Hey there!") == "Hey you!"
-        with pytest.raises(
-            Exception, match="Cannot use a NormalizedStringRefMut outside `normalize`"
-        ):
+        with pytest.raises(Exception, match="Cannot use a NormalizedStringRefMut outside `normalize`"):
             good_custom.use_after_normalize()
 
     def test_normalizer_interface(self):

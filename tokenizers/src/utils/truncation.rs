@@ -3,15 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::cmp;
 use std::mem;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Eq, Default)]
 pub enum TruncationDirection {
     Left,
+    #[default]
     Right,
-}
-impl Default for TruncationDirection {
-    fn default() -> Self {
-        TruncationDirection::Right
-    }
 }
 
 impl std::convert::AsRef<str> for TruncationDirection {
@@ -53,7 +49,7 @@ pub enum TruncationError {
     SequenceTooShort,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Eq)]
 pub enum TruncationStrategy {
     LongestFirst,
     OnlyFirst,

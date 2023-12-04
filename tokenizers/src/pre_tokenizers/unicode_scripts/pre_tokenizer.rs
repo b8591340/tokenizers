@@ -2,7 +2,7 @@ use crate::pre_tokenizers::unicode_scripts::scripts::{get_script, Script};
 use crate::tokenizer::{normalizer::Range, PreTokenizedString, PreTokenizer, Result};
 use crate::utils::macro_rules_attribute;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[macro_rules_attribute(impl_serde_type!)]
 pub struct UnicodeScripts;
 
@@ -84,7 +84,7 @@ mod tests {
 
     #[test]
     fn basic() {
-        let pretok = UnicodeScripts::default();
+        let pretok = UnicodeScripts {};
         let mut pretokenized = PreTokenizedString::from("どこで生れ。Yes");
         pretok.pre_tokenize(&mut pretokenized).unwrap();
         assert_eq!(
@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn spaces_are_included_in_every_script() {
-        let pretok = UnicodeScripts::default();
+        let pretok = UnicodeScripts {};
         let mut pretokenized = PreTokenizedString::from("Apples are りんご 林檎");
         pretok.pre_tokenize(&mut pretokenized).unwrap();
         assert_eq!(

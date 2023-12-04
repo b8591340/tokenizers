@@ -54,7 +54,7 @@ fn load_tokenizer() {
     assert_eq!(encodings.get_ids(), ids);
     assert_eq!(encodings.get_tokens(), tokens);
 
-    let decoded = tokenizer.decode(ids, false).unwrap();
+    let decoded = tokenizer.decode(&ids, false).unwrap();
     assert_eq!(decoded, example);
 }
 
@@ -93,7 +93,7 @@ fn quicktour_slow_train() -> tokenizers::Result<()> {
     // START quicktour_init_pretok
     use tokenizers::pre_tokenizers::whitespace::Whitespace;
 
-    tokenizer.with_pre_tokenizer(Whitespace::default());
+    tokenizer.with_pre_tokenizer(Whitespace {});
     // END quicktour_init_pretok
 
     // START quicktour_train
@@ -267,7 +267,7 @@ fn pipeline() -> tokenizers::Result<()> {
     use tokenizers::pre_tokenizers::whitespace::Whitespace;
     use tokenizers::{OffsetReferential, OffsetType, PreTokenizedString, PreTokenizer};
 
-    let pre_tokenizer = Whitespace::default();
+    let pre_tokenizer = Whitespace {};
     let mut pre_tokenized = PreTokenizedString::from("Hello! How are you? I'm fine, thank you.");
 
     pre_tokenizer.pre_tokenize(&mut pre_tokenized)?;
@@ -304,7 +304,7 @@ fn pipeline() -> tokenizers::Result<()> {
     // START pipeline_combine_pre_tokenizer
     use tokenizers::pre_tokenizers::{digits::Digits, sequence::Sequence};
 
-    let pre_tokenizer = Sequence::new(vec![Whitespace::default().into(), Digits::new(true).into()]);
+    let pre_tokenizer = Sequence::new(vec![Whitespace {}.into(), Digits::new(true).into()]);
     let mut pre_tokenized = PreTokenizedString::from("Call 911!");
 
     pre_tokenizer.pre_tokenize(&mut pre_tokenized)?;
@@ -347,7 +347,7 @@ fn pipeline() -> tokenizers::Result<()> {
     // [1, 27253, 16, 93, 11, 5097, 5, 7961, 5112, 6218, 0, 35, 2]
 
     let decoded = tokenizer.decode(
-        vec![1, 27253, 16, 93, 11, 5097, 5, 7961, 5112, 6218, 0, 35, 2],
+        &[1, 27253, 16, 93, 11, 5097, 5, 7961, 5112, 6218, 0, 35, 2],
         true,
     )?;
     println!("{}", decoded);
@@ -384,7 +384,7 @@ fn train_pipeline_bert() -> tokenizers::Result<()> {
     // START bert_setup_pre_tokenizer
     use tokenizers::pre_tokenizers::whitespace::Whitespace;
 
-    bert_tokenizer.with_pre_tokenizer(Whitespace::default());
+    bert_tokenizer.with_pre_tokenizer(Whitespace {});
     // END bert_setup_pre_tokenizer
     // START bert_setup_processor
     use tokenizers::processors::template::TemplateProcessing;
@@ -435,7 +435,7 @@ fn pipeline_bert() -> tokenizers::Result<()> {
     println!("{:?}", output.get_tokens());
     // ["[CLS]", "welcome", "to", "the", "[UNK]", "tok", "##eni", "##zer", "##s", "library", ".", "[SEP]"]
 
-    let decoded = bert_tokenizer.decode(output.get_ids().to_vec(), true)?;
+    let decoded = bert_tokenizer.decode(output.get_ids(), true)?;
     println!("{}", decoded);
     // "welcome to the tok ##eni ##zer ##s library ."
     // END bert_test_decoding
@@ -451,7 +451,7 @@ fn pipeline_bert() -> tokenizers::Result<()> {
     use tokenizers::decoders::wordpiece::WordPiece as WordPieceDecoder;
 
     bert_tokenizer.with_decoder(WordPieceDecoder::default());
-    let decoded = bert_tokenizer.decode(output.get_ids().to_vec(), true)?;
+    let decoded = bert_tokenizer.decode(output.get_ids(), true)?;
     // "welcome to the tokenizers library."
     // END bert_proper_decoding
     assert_eq!(decoded, "welcome to the tokenizers library.");

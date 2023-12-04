@@ -9,8 +9,8 @@ use crate::utils::{PyNormalizedString, PyNormalizedStringRefMut, PyPattern};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tk::normalizers::{
-    BertNormalizer, Lowercase, Nmt, NormalizerWrapper, Precompiled, Replace, Strip, StripAccents,
-    NFC, NFD, NFKC, NFKD,
+    BertNormalizer, Lowercase, Nmt, NormalizerWrapper, Precompiled, Prepend, Replace, Strip,
+    StripAccents, NFC, NFD, NFKC, NFKD,
 };
 use tk::{NormalizedString, Normalizer};
 use tokenizers as tk;
@@ -53,10 +53,8 @@ impl PyNormalizer {
     pub(crate) fn new(normalizer: PyNormalizerTypeWrapper) -> Self {
         PyNormalizer { normalizer }
     }
-    pub(crate) fn get_as_subtype(&self) -> PyResult<PyObject> {
+    pub(crate) fn get_as_subtype(&self, py: Python<'_>) -> PyResult<PyObject> {
         let base = self.clone();
-        let gil = Python::acquire_gil();
-        let py = gil.python();
         Ok(match self.normalizer {
             PyNormalizerTypeWrapper::Sequence(_) => Py::new(py, (PySequence {}, base))?.into_py(py),
             PyNormalizerTypeWrapper::Single(ref inner) => match &*inner.as_ref().read().unwrap() {
@@ -71,6 +69,7 @@ impl PyNormalizer {
                     NormalizerWrapper::StripNormalizer(_) => {
                         Py::new(py, (PyBertNormalizer {}, base))?.into_py(py)
                     }
+                    NormalizerWrapper::Prepend(_) => Py::new(py, (PyPrepend {}, base))?.into_py(py),
                     NormalizerWrapper::StripAccents(_) => {
                         Py::new(py, (PyStripAccents {}, base))?.into_py(py)
                     }
@@ -174,7 +173,8 @@ macro_rules! getter {
         let super_ = $self.as_ref();
         if let PyNormalizerTypeWrapper::Single(ref norm) = super_.normalizer {
             let wrapper = norm.read().unwrap();
-            if let PyNormalizerWrapper::Wrapped(NormalizerWrapper::$variant(o)) = *wrapper {
+            if let PyNormalizerWrapper::Wrapped(NormalizerWrapper::$variant(o)) = (*wrapper).clone()
+            {
                 o.$name
             } else {
                 unreachable!()
@@ -217,9 +217,6 @@ macro_rules! setter {
 ///     lowercase (:obj:`bool`, `optional`, defaults to :obj:`True`):
 ///         Whether to lowercase.
 #[pyclass(extends=PyNormalizer, module = "tokenizers.normalizers", name = "BertNormalizer")]
-#[pyo3(
-    text_signature = "(self, clean_text=True, handle_chinese_chars=True, strip_accents=None, lowercase=True)"
-)]
 pub struct PyBertNormalizer {}
 #[pymethods]
 impl PyBertNormalizer {
@@ -269,12 +266,13 @@ impl PyBertNormalizer {
     }
 
     #[new]
-    #[args(
-        clean_text = "true",
-        handle_chinese_chars = "true",
-        strip_accents = "None",
-        lowercase = "true"
-    )]
+    #[pyo3(signature = (
+        clean_text = true,
+        handle_chinese_chars = true,
+        strip_accents = None,
+        lowercase = true
+    ),
+        text_signature = "(self, clean_text=True, handle_chinese_chars=True, strip_accents=None, lowercase=True)")]
     fn new(
         clean_text: bool,
         handle_chinese_chars: bool,
@@ -289,11 +287,11 @@ impl PyBertNormalizer {
 
 /// NFD Unicode Normalizer
 #[pyclass(extends=PyNormalizer, module = "tokenizers.normalizers", name = "NFD")]
-#[pyo3(text_signature = "(self)")]
 pub struct PyNFD {}
 #[pymethods]
 impl PyNFD {
     #[new]
+    #[pyo3(text_signature = "(self)")]
     fn new() -> (Self, PyNormalizer) {
         (PyNFD {}, PyNormalizer::new(NFD.into()))
     }
@@ -301,11 +299,11 @@ impl PyNFD {
 
 /// NFKD Unicode Normalizer
 #[pyclass(extends=PyNormalizer, module = "tokenizers.normalizers", name = "NFKD")]
-#[pyo3(text_signature = "(self)")]
 pub struct PyNFKD {}
 #[pymethods]
 impl PyNFKD {
     #[new]
+    #[pyo3(text_signature = "(self)")]
     fn new() -> (Self, PyNormalizer) {
         (PyNFKD {}, NFKD.into())
     }
@@ -313,11 +311,11 @@ impl PyNFKD {
 
 /// NFC Unicode Normalizer
 #[pyclass(extends=PyNormalizer, module = "tokenizers.normalizers", name = "NFC")]
-#[pyo3(text_signature = "(self)")]
 pub struct PyNFC {}
 #[pymethods]
 impl PyNFC {
     #[new]
+    #[pyo3(text_signature = "(self)")]
     fn new() -> (Self, PyNormalizer) {
         (PyNFC {}, NFC.into())
     }
@@ -325,11 +323,11 @@ impl PyNFC {
 
 /// NFKC Unicode Normalizer
 #[pyclass(extends=PyNormalizer, module = "tokenizers.normalizers", name = "NFKC")]
-#[pyo3(text_signature = "(self)")]
 pub struct PyNFKC {}
 #[pymethods]
 impl PyNFKC {
     #[new]
+    #[pyo3(text_signature = "(self)")]
     fn new() -> (Self, PyNormalizer) {
         (PyNFKC {}, NFKC.into())
     }
@@ -346,6 +344,7 @@ pub struct PySequence {}
 #[pymethods]
 impl PySequence {
     #[new]
+    #[pyo3(text_signature = None)]
     fn new(normalizers: &PyList) -> PyResult<(Self, PyNormalizer)> {
         let mut sequence = Vec::with_capacity(normalizers.len());
         for n in normalizers.iter() {
@@ -362,7 +361,7 @@ impl PySequence {
     }
 
     fn __getnewargs__<'p>(&self, py: Python<'p>) -> &'p PyTuple {
-        PyTuple::new(py, &[PyList::empty(py)])
+        PyTuple::new(py, [PyList::empty(py)])
     }
 
     fn __len__(&self) -> usize {
@@ -372,11 +371,11 @@ impl PySequence {
 
 /// Lowercase Normalizer
 #[pyclass(extends=PyNormalizer, module = "tokenizers.normalizers", name = "Lowercase")]
-#[pyo3(text_signature = "(self)")]
 pub struct PyLowercase {}
 #[pymethods]
 impl PyLowercase {
     #[new]
+    #[pyo3(text_signature = "(self)")]
     fn new() -> (Self, PyNormalizer) {
         (PyLowercase {}, Lowercase.into())
     }
@@ -384,7 +383,6 @@ impl PyLowercase {
 
 /// Strip normalizer
 #[pyclass(extends=PyNormalizer, module = "tokenizers.normalizers", name = "Strip")]
-#[pyo3(text_signature = "(self, left=True, right=True)")]
 pub struct PyStrip {}
 #[pymethods]
 impl PyStrip {
@@ -409,19 +407,41 @@ impl PyStrip {
     }
 
     #[new]
-    #[args(left = "true", right = "true")]
+    #[pyo3(signature = (left = true, right = true), text_signature = "(self, left=True, right=True)")]
     fn new(left: bool, right: bool) -> (Self, PyNormalizer) {
         (PyStrip {}, Strip::new(left, right).into())
     }
 }
 
+/// Prepend normalizer
+#[pyclass(extends=PyNormalizer, module = "tokenizers.normalizers", name = "Prepend")]
+pub struct PyPrepend {}
+#[pymethods]
+impl PyPrepend {
+    #[getter]
+    fn get_prepend(self_: PyRef<Self>) -> String {
+        getter!(self_, Prepend, prepend)
+    }
+
+    #[setter]
+    fn set_prepend(self_: PyRef<Self>, prepend: String) {
+        setter!(self_, Prepend, prepend, prepend)
+    }
+
+    #[new]
+    #[pyo3(signature = (prepend="▁".to_string()), text_signature = "(self, prepend)")]
+    fn new(prepend: String) -> (Self, PyNormalizer) {
+        (PyPrepend {}, Prepend::new(prepend).into())
+    }
+}
+
 /// StripAccents normalizer
 #[pyclass(extends=PyNormalizer, module = "tokenizers.normalizers", name = "StripAccents")]
-#[pyo3(text_signature = "(self)")]
 pub struct PyStripAccents {}
 #[pymethods]
 impl PyStripAccents {
     #[new]
+    #[pyo3(text_signature = "(self)")]
     fn new() -> (Self, PyNormalizer) {
         (PyStripAccents {}, StripAccents.into())
     }
@@ -429,11 +449,11 @@ impl PyStripAccents {
 
 /// Nmt normalizer
 #[pyclass(extends=PyNormalizer, module = "tokenizers.normalizers", name = "Nmt")]
-#[pyo3(text_signature = "(self)")]
 pub struct PyNmt {}
 #[pymethods]
 impl PyNmt {
     #[new]
+    #[pyo3(text_signature = "(self)")]
     fn new() -> (Self, PyNormalizer) {
         (PyNmt {}, Nmt.into())
     }
@@ -442,11 +462,11 @@ impl PyNmt {
 /// Precompiled normalizer
 /// Don't use manually it is used for compatiblity for SentencePiece.
 #[pyclass(extends=PyNormalizer, module = "tokenizers.normalizers", name = "Precompiled")]
-#[pyo3(text_signature = "(self, precompiled_charsmap)")]
 pub struct PyPrecompiled {}
 #[pymethods]
 impl PyPrecompiled {
     #[new]
+    #[pyo3(text_signature = "(self, precompiled_charsmap)")]
     fn new(py_precompiled_charsmap: &PyBytes) -> PyResult<(Self, PyNormalizer)> {
         let precompiled_charsmap: &[u8] = FromPyObject::extract(py_precompiled_charsmap)?;
         Ok((
@@ -465,11 +485,11 @@ impl PyPrecompiled {
 
 /// Replace normalizer
 #[pyclass(extends=PyNormalizer, module = "tokenizers.normalizers", name = "Replace")]
-#[pyo3(text_signature = "(self, pattern, content)")]
 pub struct PyReplace {}
 #[pymethods]
 impl PyReplace {
     #[new]
+    #[pyo3(text_signature = "(self, pattern, content)")]
     fn new(pattern: PyPattern, content: String) -> PyResult<(Self, PyNormalizer)> {
         Ok((
             PyReplace {},
@@ -613,6 +633,26 @@ impl Normalizer for PyNormalizerWrapper {
     }
 }
 
+/// Normalizers Module
+#[pymodule]
+pub fn normalizers(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<PyNormalizer>()?;
+    m.add_class::<PyBertNormalizer>()?;
+    m.add_class::<PyNFD>()?;
+    m.add_class::<PyNFKD>()?;
+    m.add_class::<PyNFC>()?;
+    m.add_class::<PyNFKC>()?;
+    m.add_class::<PySequence>()?;
+    m.add_class::<PyLowercase>()?;
+    m.add_class::<PyStrip>()?;
+    m.add_class::<PyStripAccents>()?;
+    m.add_class::<PyPrepend>()?;
+    m.add_class::<PyNmt>()?;
+    m.add_class::<PyPrecompiled>()?;
+    m.add_class::<PyReplace>()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
     use pyo3::prelude::*;
@@ -624,13 +664,11 @@ mod test {
 
     #[test]
     fn get_subtype() {
-        let py_norm = PyNormalizer::new(NFC.into());
-        let py_nfc = py_norm.get_as_subtype().unwrap();
-        let gil = Python::acquire_gil();
-        assert_eq!(
-            "NFC",
-            py_nfc.as_ref(gil.python()).get_type().name().unwrap()
-        );
+        Python::with_gil(|py| {
+            let py_norm = PyNormalizer::new(NFC.into());
+            let py_nfc = py_norm.get_as_subtype(py).unwrap();
+            assert_eq!("NFC", py_nfc.as_ref(py).get_type().name().unwrap());
+        })
     }
 
     #[test]

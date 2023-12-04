@@ -27,10 +27,8 @@ impl PyTrainer {
     pub(crate) fn new(trainer: Arc<RwLock<TrainerWrapper>>) -> Self {
         PyTrainer { trainer }
     }
-    pub(crate) fn get_as_subtype(&self) -> PyResult<PyObject> {
+    pub(crate) fn get_as_subtype(&self, py: Python<'_>) -> PyResult<PyObject> {
         let base = self.clone();
-        let gil = Python::acquire_gil();
-        let py = gil.python();
         Ok(match *self.trainer.as_ref().read().unwrap() {
             TrainerWrapper::BpeTrainer(_) => Py::new(py, (PyBpeTrainer {}, base))?.into_py(py),
             TrainerWrapper::WordPieceTrainer(_) => {
@@ -164,6 +162,12 @@ macro_rules! setter {
 ///
 ///     end_of_word_suffix (:obj:`str`, `optional`):
 ///         A suffix to be used for every subword that is a end-of-word.
+///
+///     max_token_length (:obj:`int`, `optional`):
+///         Prevents creating tokens longer than the specified size.
+///         This can help with reducing polluting your vocabulary with
+///         highly repetitive tokens like `======` for wikipedia
+///
 #[pyclass(extends=PyTrainer, module = "tokenizers.trainers", name = "BpeTrainer")]
 pub struct PyBpeTrainer {}
 #[pymethods]
@@ -222,7 +226,7 @@ impl PyBpeTrainer {
                     if let Ok(content) = token.extract::<String>() {
                         Ok(tk::tokenizer::AddedToken::from(content, true))
                     } else if let Ok(mut token) = token.extract::<PyRefMut<PyAddedToken>>() {
-                        token.is_special_token = true;
+                        token.special = true;
                         Ok(token.get_token())
                     } else {
                         Err(exceptions::PyTypeError::new_err(
@@ -243,6 +247,16 @@ impl PyBpeTrainer {
     #[setter]
     fn set_limit_alphabet(self_: PyRef<Self>, limit: Option<usize>) {
         setter!(self_, BpeTrainer, limit_alphabet, limit);
+    }
+
+    #[getter]
+    fn get_max_token_length(self_: PyRef<Self>) -> Option<usize> {
+        getter!(self_, BpeTrainer, max_token_length)
+    }
+
+    #[setter]
+    fn set_max_token_length(self_: PyRef<Self>, limit: Option<usize>) {
+        setter!(self_, BpeTrainer, max_token_length, limit);
     }
 
     #[getter]
@@ -285,7 +299,7 @@ impl PyBpeTrainer {
     }
 
     #[new]
-    #[args(kwargs = "**")]
+    #[pyo3(signature = (**kwargs), text_signature = None)]
     pub fn new(kwargs: Option<&PyDict>) -> PyResult<(Self, PyTrainer)> {
         let mut builder = tk::models::bpe::BpeTrainer::builder();
         if let Some(kwargs) = kwargs {
@@ -297,7 +311,7 @@ impl PyBpeTrainer {
                     "show_progress" => builder = builder.show_progress(val.extract()?),
                     "special_tokens" => {
                         builder = builder.special_tokens(
-                            val.cast_as::<PyList>()?
+                            val.downcast::<PyList>()?
                                 .into_iter()
                                 .map(|token| {
                                     if let Ok(content) = token.extract::<String>() {
@@ -305,7 +319,7 @@ impl PyBpeTrainer {
                                     } else if let Ok(mut token) =
                                         token.extract::<PyRefMut<PyAddedToken>>()
                                     {
-                                        token.is_special_token = true;
+                                        token.special = true;
                                         Ok(token.get_token())
                                     } else {
                                         Err(exceptions::PyTypeError::new_err(
@@ -317,6 +331,7 @@ impl PyBpeTrainer {
                         );
                     }
                     "limit_alphabet" => builder = builder.limit_alphabet(val.extract()?),
+                    "max_token_length" => builder = builder.max_token_length(val.extract()?),
                     "initial_alphabet" => {
                         let alphabet: Vec<String> = val.extract()?;
                         builder = builder.initial_alphabet(
@@ -368,9 +383,6 @@ impl PyBpeTrainer {
 ///     end_of_word_suffix (:obj:`str`, `optional`):
 ///         A suffix to be used for every subword that is a end-of-word.
 #[pyclass(extends=PyTrainer, module = "tokenizers.trainers", name = "WordPieceTrainer")]
-#[pyo3(
-    text_signature = "(self, vocab_size=30000, min_frequency=0, show_progress=True, special_tokens=[], limit_alphabet=None, initial_alphabet= [],continuing_subword_prefix=\"##\", end_of_word_suffix=None)"
-)]
 pub struct PyWordPieceTrainer {}
 #[pymethods]
 impl PyWordPieceTrainer {
@@ -428,7 +440,7 @@ impl PyWordPieceTrainer {
                     if let Ok(content) = token.extract::<String>() {
                         Ok(tk::tokenizer::AddedToken::from(content, true))
                     } else if let Ok(mut token) = token.extract::<PyRefMut<PyAddedToken>>() {
-                        token.is_special_token = true;
+                        token.special = true;
                         Ok(token.get_token())
                     } else {
                         Err(exceptions::PyTypeError::new_err(
@@ -491,7 +503,10 @@ impl PyWordPieceTrainer {
     }
 
     #[new]
-    #[args(kwargs = "**")]
+    #[pyo3(
+        signature = (** kwargs),
+        text_signature = "(self, vocab_size=30000, min_frequency=0, show_progress=True, special_tokens=[], limit_alphabet=None, initial_alphabet= [],continuing_subword_prefix=\"##\", end_of_word_suffix=None)"
+    )]
     pub fn new(kwargs: Option<&PyDict>) -> PyResult<(Self, PyTrainer)> {
         let mut builder = tk::models::wordpiece::WordPieceTrainer::builder();
         if let Some(kwargs) = kwargs {
@@ -503,7 +518,7 @@ impl PyWordPieceTrainer {
                     "show_progress" => builder = builder.show_progress(val.extract()?),
                     "special_tokens" => {
                         builder = builder.special_tokens(
-                            val.cast_as::<PyList>()?
+                            val.downcast::<PyList>()?
                                 .into_iter()
                                 .map(|token| {
                                     if let Ok(content) = token.extract::<String>() {
@@ -511,7 +526,7 @@ impl PyWordPieceTrainer {
                                     } else if let Ok(mut token) =
                                         token.extract::<PyRefMut<PyAddedToken>>()
                                     {
-                                        token.is_special_token = true;
+                                        token.special = true;
                                         Ok(token.get_token())
                                     } else {
                                         Err(exceptions::PyTypeError::new_err(
@@ -617,7 +632,7 @@ impl PyWordLevelTrainer {
                     if let Ok(content) = token.extract::<String>() {
                         Ok(tk::tokenizer::AddedToken::from(content, true))
                     } else if let Ok(mut token) = token.extract::<PyRefMut<PyAddedToken>>() {
-                        token.is_special_token = true;
+                        token.special = true;
                         Ok(token.get_token())
                     } else {
                         Err(exceptions::PyTypeError::new_err(
@@ -631,7 +646,7 @@ impl PyWordLevelTrainer {
     }
 
     #[new]
-    #[args(kwargs = "**")]
+    #[pyo3(signature = (**kwargs), text_signature = None)]
     pub fn new(kwargs: Option<&PyDict>) -> PyResult<(Self, PyTrainer)> {
         let mut builder = tk::models::wordlevel::WordLevelTrainer::builder();
 
@@ -650,7 +665,7 @@ impl PyWordLevelTrainer {
                     }
                     "special_tokens" => {
                         builder.special_tokens(
-                            val.cast_as::<PyList>()?
+                            val.downcast::<PyList>()?
                                 .into_iter()
                                 .map(|token| {
                                     if let Ok(content) = token.extract::<String>() {
@@ -658,7 +673,7 @@ impl PyWordLevelTrainer {
                                     } else if let Ok(mut token) =
                                         token.extract::<PyRefMut<PyAddedToken>>()
                                     {
-                                        token.is_special_token = true;
+                                        token.special = true;
                                         Ok(token.get_token())
                                     } else {
                                         Err(exceptions::PyTypeError::new_err(
@@ -716,9 +731,6 @@ impl PyWordLevelTrainer {
 ///         The number of iterations of the EM algorithm to perform before
 ///         pruning the vocabulary.
 #[pyclass(extends=PyTrainer, module = "tokenizers.trainers", name = "UnigramTrainer")]
-#[pyo3(
-    text_signature = "(self, vocab_size=8000, show_progress=True, special_tokens=[], shrinking_factor=0.75, unk_token=None, max_piece_length=16, n_sub_iterations=2)"
-)]
 pub struct PyUnigramTrainer {}
 #[pymethods]
 impl PyUnigramTrainer {
@@ -766,7 +778,7 @@ impl PyUnigramTrainer {
                     if let Ok(content) = token.extract::<String>() {
                         Ok(tk::tokenizer::AddedToken::from(content, true))
                     } else if let Ok(mut token) = token.extract::<PyRefMut<PyAddedToken>>() {
-                        token.is_special_token = true;
+                        token.special = true;
                         Ok(token.get_token())
                     } else {
                         Err(exceptions::PyTypeError::new_err(
@@ -799,7 +811,10 @@ impl PyUnigramTrainer {
     }
 
     #[new]
-    #[args(kwargs = "**")]
+    #[pyo3(
+        signature = (**kwargs),
+        text_signature = "(self, vocab_size=8000, show_progress=True, special_tokens=[], shrinking_factor=0.75, unk_token=None, max_piece_length=16, n_sub_iterations=2)"
+    )]
     pub fn new(kwargs: Option<&PyDict>) -> PyResult<(Self, PyTrainer)> {
         let mut builder = tk::models::unigram::UnigramTrainer::builder();
         if let Some(kwargs) = kwargs {
@@ -823,7 +838,7 @@ impl PyUnigramTrainer {
                         )
                     }
                     "special_tokens" => builder.special_tokens(
-                        val.cast_as::<PyList>()?
+                        val.downcast::<PyList>()?
                             .into_iter()
                             .map(|token| {
                                 if let Ok(content) = token.extract::<String>() {
@@ -831,7 +846,7 @@ impl PyUnigramTrainer {
                                 } else if let Ok(mut token) =
                                     token.extract::<PyRefMut<PyAddedToken>>()
                                 {
-                                    token.is_special_token = true;
+                                    token.special = true;
                                     Ok(token.get_token())
                                 } else {
                                     Err(exceptions::PyTypeError::new_err(
@@ -857,6 +872,17 @@ impl PyUnigramTrainer {
     }
 }
 
+/// Trainers Module
+#[pymodule]
+pub fn trainers(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<PyTrainer>()?;
+    m.add_class::<PyBpeTrainer>()?;
+    m.add_class::<PyWordPieceTrainer>()?;
+    m.add_class::<PyWordLevelTrainer>()?;
+    m.add_class::<PyUnigramTrainer>()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -864,12 +890,10 @@ mod tests {
 
     #[test]
     fn get_subtype() {
-        let py_trainer = PyTrainer::new(Arc::new(RwLock::new(BpeTrainer::default().into())));
-        let py_bpe = py_trainer.get_as_subtype().unwrap();
-        let gil = Python::acquire_gil();
-        assert_eq!(
-            "BpeTrainer",
-            py_bpe.as_ref(gil.python()).get_type().name().unwrap()
-        );
+        Python::with_gil(|py| {
+            let py_trainer = PyTrainer::new(Arc::new(RwLock::new(BpeTrainer::default().into())));
+            let py_bpe = py_trainer.get_as_subtype(py).unwrap();
+            assert_eq!("BpeTrainer", py_bpe.as_ref(py).get_type().name().unwrap());
+        })
     }
 }

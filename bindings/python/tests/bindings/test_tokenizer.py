@@ -1,29 +1,34 @@
-import numpy as np
 import pickle
-import pytest
-from ..utils import (
-    data_dir,
-    roberta_files,
-    bert_files,
-    multiprocessing_with_parallelism,
-)
 
-from tokenizers import AddedToken, Tokenizer, Encoding
-from tokenizers.models import Model, BPE, WordPiece
-from tokenizers.pre_tokenizers import ByteLevel
-from tokenizers.processors import RobertaProcessing, BertProcessing
-from tokenizers.normalizers import Lowercase
+import numpy as np
+import pytest
+
+from tokenizers import AddedToken, Encoding, Tokenizer
 from tokenizers.implementations import BertWordPieceTokenizer
+from tokenizers.models import BPE, Model, WordPiece, Unigram
+from tokenizers.normalizers import Lowercase
+from tokenizers.pre_tokenizers import ByteLevel
+from tokenizers.processors import BertProcessing, RobertaProcessing
+
+from ..utils import bert_files, data_dir, multiprocessing_with_parallelism, roberta_files
 
 
 class TestAddedToken:
     def test_instantiate_with_content_only(self):
         added_token = AddedToken("<mask>")
+        added_token.content = "<MASK>"
+        assert added_token.content == "<MASK>"
         assert type(added_token) == AddedToken
+        added_token.content = added_token.content.lower()
+
+        assert added_token.special == False
+        added_token.special = True
+        assert added_token.special == True
+        added_token.special = False
         assert str(added_token) == "<mask>"
         assert (
             repr(added_token)
-            == 'AddedToken("<mask>", rstrip=False, lstrip=False, single_word=False, normalized=True)'
+            == 'AddedToken("<mask>", rstrip=False, lstrip=False, single_word=False, normalized=True, special=False)'
         )
         assert added_token.rstrip == False
         assert added_token.lstrip == False
@@ -369,6 +374,16 @@ class TestTokenizer:
         vocab = tokenizer.get_vocab(with_added_tokens=False)
         assert vocab == {}
 
+        # Can retrieve added token decoder
+        vocab = tokenizer.get_added_tokens_decoder()
+        assert vocab == {
+            0: AddedToken("my", rstrip=False, lstrip=False, single_word=False, normalized=True, special=False),
+            1: AddedToken("name", rstrip=False, lstrip=False, single_word=False, normalized=True, special=False),
+            2: AddedToken("is", rstrip=False, lstrip=False, single_word=False, normalized=True, special=False),
+            3: AddedToken("john", rstrip=False, lstrip=False, single_word=False, normalized=True, special=False),
+            4: AddedToken("pair", rstrip=False, lstrip=False, single_word=False, normalized=True, special=False),
+        }
+
     def test_get_vocab_size(self):
         tokenizer = Tokenizer(BPE())
         tokenizer.add_tokens(["my", "name", "is", "john", "pair"])
@@ -416,3 +431,29 @@ class TestTokenizer:
         tokenizer = Tokenizer.from_pretrained("anthony/tokenizers-test", revision="gpt-2")
         output = tokenizer.encode("Hey there dear friend!", add_special_tokens=False)
         assert output.tokens == ["Hey", "Ġthere", "Ġdear", "Ġfriend", "!"]
+
+    def test_unigram_byte_fallback(self):
+        vocab = [
+            ("<unk>", 0.0),
+            ("A", -0.01),
+            ("sen", -0.02),
+            ("te", -0.03),
+            ("n", -0.04),
+            ("ce", -0.05),
+            ("<0xF0>", -0.06),
+            ("<0x9F>", -0.06),
+            ("<0xA4>", -0.06),
+            ("<0x97>", -0.06),
+            (" ", -0.4),
+        ]
+        tokenizer = tokenizer = Tokenizer(Unigram(vocab, 0, byte_fallback=False))
+
+        output = tokenizer.encode("A sentence 🤗")
+        assert output.ids == [1, 10, 2, 3, 4, 5, 10, 0]
+        assert output.tokens == ["A", " ", "sen", "te", "n", "ce", " ", "🤗"]
+
+        tokenizer = Tokenizer(Unigram(vocab, 0, byte_fallback=True))
+
+        output = tokenizer.encode("A sentence 🤗")
+        assert output.ids == [1, 10, 2, 3, 4, 5, 10, 6, 7, 8, 9]
+        assert output.tokens == ["A", " ", "sen", "te", "n", "ce", " ", "<0xF0>", "<0x9F>", "<0xA4>", "<0x97>"]

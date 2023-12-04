@@ -99,24 +99,55 @@ pub trait PostProcessor {
         encoding: Encoding,
         pair_encoding: Option<Encoding>,
         add_special_tokens: bool,
-    ) -> Result<Encoding>;
+    ) -> Result<Encoding> {
+        let mut encodings = if let Some(pair_encoding) = pair_encoding {
+            vec![encoding, pair_encoding]
+        } else {
+            vec![encoding]
+        };
+        encodings.iter_mut().enumerate().for_each(|(i, encoding)| {
+            encoding.set_sequence_id(i);
+            encoding
+                .get_overflowing_mut()
+                .iter_mut()
+                .for_each(|encoding| encoding.set_sequence_id(i));
+            encoding.set_type_ids(vec![i as u32; encoding.len()]);
+        });
+
+        let encodings = self.process_encodings(encodings, add_special_tokens)?;
+        Ok(Encoding::merge(encodings, false))
+    }
+
+    /// Process any amount of encodings and returns a series of encoding (might merge them)
+    fn process_encodings(
+        &self,
+        encodings: Vec<Encoding>,
+        add_special_tokens: bool,
+    ) -> Result<Vec<Encoding>>;
 }
 impl dyn PostProcessor {
     pub fn default_process(
-        mut encoding: Encoding,
-        pair_encoding: Option<Encoding>,
+        encodings: Vec<Encoding>,
         _add_special_tokens: bool,
-    ) -> Result<Encoding> {
-        match pair_encoding {
-            None => Ok(encoding),
-            Some(mut pair) => {
-                encoding.set_sequence_id(0);
-                pair.set_sequence_id(1);
-                encoding.merge_with(pair, false);
-                Ok(encoding)
+    ) -> Result<Vec<Encoding>> {
+        match encodings.len() {
+            1 => Ok(encodings),
+            _ => {
+                let mut final_encoding = Encoding::default();
+                for (i, mut encoding) in encodings.into_iter().enumerate() {
+                    encoding.set_sequence_id(i);
+                    final_encoding.merge_with(encoding, false);
+                }
+                Ok(vec![final_encoding])
             }
         }
     }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ProcessorError {
+    #[error("encodings vector length must be either 1 or 2")]
+    InvalidEncodingsVecLength,
 }
 
 /// A `Decoder` changes the raw tokens into its more readable form.
@@ -146,7 +177,7 @@ pub trait Trainer {
         F: Fn(&str) -> Result<Vec<String>> + Sync;
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
     pub id: u32,
     pub value: String,
@@ -368,7 +399,7 @@ where
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Tokenizer(
     TokenizerImpl<
         ModelWrapper,
@@ -465,6 +496,10 @@ impl DerefMut for Tokenizer {
         &mut self.0
     }
 }
+
+#[derive(thiserror::Error, Debug)]
+#[error("{0}")]
+pub struct TruncationParamError(String);
 
 /// A `Tokenizer` is capable of encoding/decoding any text.
 #[derive(Clone, Debug)]
@@ -564,9 +599,21 @@ where
     }
 
     /// Set the truncation parameters
-    pub fn with_truncation(&mut self, trunc: Option<TruncationParams>) -> &mut Self {
+    ///
+    /// Fails if `stride` is too high relative to `max_length` and `post_processor.added_tokens()`
+    pub fn with_truncation(&mut self, trunc: Option<TruncationParams>) -> Result<&mut Self> {
+        if let Some(trunc_params) = &trunc {
+            let n_added_tokens = self.get_n_added_tokens(false);
+            let effective_max_length = trunc_params.max_length - n_added_tokens;
+            if effective_max_length < trunc_params.stride {
+                return Err(Box::new(TruncationParamError(format!(
+                    "tokenizer stride set to {}, which is greater than or equal to its effective max length of {} (= {} original max length - {} added special tokens), ",
+                    trunc_params.stride, effective_max_length, trunc_params.max_length, n_added_tokens
+                ))));
+            }
+        }
         self.truncation = trunc;
-        self
+        Ok(self)
     }
 
     /// Get the currently set truncation parameters
@@ -612,14 +659,20 @@ where
         final_vocab
     }
 
+    /// Get the added tokens decoder
+    pub fn get_added_tokens_decoder(&self) -> HashMap<u32, AddedToken> {
+        self.added_vocabulary.get_added_tokens_decoder().clone()
+    }
+
     /// Get the size of the vocabulary
     pub fn get_vocab_size(&self, with_added_tokens: bool) -> usize {
-        self.model.get_vocab_size()
-            + if with_added_tokens {
-                self.added_vocabulary.len()
-            } else {
-                0
-            }
+        // TODO ArthurZ THIS IS WRONG! We need to measure the length of the `set` because
+        // now some tokens can be both in the added_tokens_encoder and in the vocab
+        if with_added_tokens {
+            self.get_vocab(true).len()
+        } else {
+            self.model.get_vocab_size()
+        }
     }
 
     /// Converts a token in the corresponding id.
@@ -764,12 +817,12 @@ where
     }
 
     /// Decode the given ids, back to a String
-    pub fn decode(&self, ids: Vec<u32>, skip_special_tokens: bool) -> Result<String> {
+    pub fn decode(&self, ids: &[u32], skip_special_tokens: bool) -> Result<String> {
         let tokens = ids
-            .into_iter()
+            .iter()
             .filter_map(|id| {
                 self.added_vocabulary
-                    .id_to_token(id, &self.model)
+                    .id_to_token(*id, &self.model)
                     .filter(|token| {
                         !skip_special_tokens || !self.added_vocabulary.is_special_token(token)
                     })
@@ -871,11 +924,7 @@ where
         // 1. First we truncate if needed
         let (encoding, pair_encoding) = {
             if let Some(trunc) = &self.truncation {
-                let n_added_tokens = if let Some(processor) = &self.post_processor {
-                    processor.added_tokens(pair_encoding.is_some())
-                } else {
-                    0
-                };
+                let n_added_tokens = self.get_n_added_tokens(pair_encoding.is_some());
 
                 if add_special_tokens && n_added_tokens > 0 {
                     let params = TruncationParams {
@@ -895,7 +944,17 @@ where
         let final_encoding = if let Some(processor) = &self.post_processor {
             processor.process(encoding, pair_encoding, add_special_tokens)?
         } else {
-            <dyn PostProcessor>::default_process(encoding, pair_encoding, add_special_tokens)?
+            let encodings = if let Some(pair_encoding) = pair_encoding {
+                vec![encoding, pair_encoding]
+            } else {
+                vec![encoding]
+            };
+            let mut encodings =
+                <dyn PostProcessor>::default_process(encodings, add_special_tokens)?;
+            if encodings.len() != 1 {
+                panic!("We haven't reduced the encodings like we should have");
+            }
+            encodings.pop().unwrap()
         };
 
         // 3. Then we pad if needed
@@ -908,6 +967,14 @@ where
         };
 
         Ok(final_encoding)
+    }
+
+    fn get_n_added_tokens(&self, is_pair: bool) -> usize {
+        if let Some(processor) = &self.post_processor {
+            processor.added_tokens(is_pair)
+        } else {
+            0
+        }
     }
 }
 
@@ -967,7 +1034,7 @@ where
     /// Decode all sentences in parallel
     pub fn decode_batch(
         &self,
-        sentences: Vec<Vec<u32>>,
+        sentences: &[&[u32]],
         skip_special_tokens: bool,
     ) -> Result<Vec<String>>
     where
@@ -1011,11 +1078,11 @@ where
                     let progress = ProgressBar::new(len);
                     progress.set_style(
                         ProgressStyle::default_bar()
-                            .template("[{elapsed_precise}] {msg:<40!} {wide_bar} {percent:>18!}%"),
+                            .template("[{elapsed_precise}] {msg:<30!} {wide_bar} {percent:>18!}%")
+                            .expect("Invalid progress template"),
                     );
                     progress
-                        .set_message(&format!("Pre-processing files ({:.2} Mo)", len / 1_000_000));
-                    progress.set_draw_delta(len / 100); // Redraw only every 2%
+                        .set_message(format!("Pre-processing files ({:.2} Mo)", len / 1_000_000));
                     Some(progress)
                 } else {
                     None
@@ -1064,15 +1131,10 @@ where
             let progress = ProgressBar::new(len);
             progress.set_style(
                 ProgressStyle::default_bar()
-                    .template("[{elapsed_precise}] {msg:<40!} {wide_bar} {pos:<9!}/{len:>9!}"),
+                    .template("[{elapsed_precise}] {msg:<30!} {wide_bar} {pos:<9!}/{len:>9!}")
+                    .expect("Invalid progress template"),
             );
             progress.set_message("Pre-processing sequences");
-            if len > 0 {
-                progress.set_draw_delta(len / 100); // Redraw only every 2%
-            } else {
-                // Trying to have a good default to avoid progress tracking being the bottleneck
-                progress.set_draw_delta(1000);
-            }
             Some(progress)
         } else {
             None
@@ -1160,6 +1222,10 @@ where
     PP: DeserializeOwned + PostProcessor,
     D: DeserializeOwned + Decoder,
 {
+    #[deprecated(
+        since = "0.14.0",
+        note = "Users should download the file separately using https://github.com/huggingface/hf-hub instead, which splits concerns of accessing the web, and should use the new cache layout"
+    )]
     #[cfg(feature = "http")]
     /// Instantiate a new Tokenizer from a file hosted on the Hugging Face Hub.
     /// It expects the `identifier` of a model that includes a `tokenizer.json` file.

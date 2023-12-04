@@ -32,10 +32,8 @@ pub struct PyModel {
 }
 
 impl PyModel {
-    pub(crate) fn get_as_subtype(&self) -> PyResult<PyObject> {
+    pub(crate) fn get_as_subtype(&self, py: Python<'_>) -> PyResult<PyObject> {
         let base = self.clone();
-        let gil = Python::acquire_gil();
-        let py = gil.python();
         Ok(match *self.model.as_ref().read().unwrap() {
             ModelWrapper::BPE(_) => Py::new(py, (PyBPE {}, base))?.into_py(py),
             ModelWrapper::WordPiece(_) => Py::new(py, (PyWordPiece {}, base))?.into_py(py),
@@ -91,6 +89,7 @@ where
 #[pymethods]
 impl PyModel {
     #[new]
+    #[pyo3(text_signature = None)]
     fn __new__() -> Self {
         // Instantiate a default empty model. This doesn't really make sense, but we need
         // to be able to instantiate an empty model for pickle capabilities.
@@ -185,12 +184,14 @@ impl PyModel {
     #[pyo3(text_signature = "(self, folder, prefix)")]
     fn save<'a>(
         &self,
+        py: Python<'_>,
         folder: &str,
         mut prefix: Option<&'a str>,
         name: Option<&'a str>,
     ) -> PyResult<Vec<String>> {
         if name.is_some() {
             deprecation_warning(
+                py,
                 "0.10.0",
                 "Parameter `name` of Model.save has been renamed `prefix`",
             )?;
@@ -215,8 +216,9 @@ impl PyModel {
     ///
     /// Returns:
     ///     :class:`~tokenizers.trainers.Trainer`: The Trainer used to train this model
-    fn get_trainer(&self) -> PyResult<PyObject> {
-        PyTrainer::from(self.model.read().unwrap().get_trainer()).get_as_subtype()
+    #[pyo3(text_signature = "(self)")]
+    fn get_trainer(&self, py: Python<'_>) -> PyResult<PyObject> {
+        PyTrainer::from(self.model.read().unwrap().get_trainer()).get_as_subtype(py)
     }
 }
 
@@ -248,10 +250,10 @@ impl PyModel {
 ///
 ///     fuse_unk (:obj:`bool`, `optional`):
 ///         Whether to fuse any subsequent unknown tokens into a single one
+///
+///     byte_fallback (:obj:`bool`, `optional`):
+///         Whether to use spm byte-fallback trick (defaults to False)
 #[pyclass(extends=PyModel, module = "tokenizers.models", name = "BPE")]
-#[pyo3(
-    text_signature = "(self, vocab=None, merges=None, cache_capacity=None, dropout=None, unk_token=None, continuing_subword_prefix=None, end_of_word_suffix=None, fuse_unk=None)"
-)]
 pub struct PyBPE {}
 
 impl PyBPE {
@@ -276,6 +278,7 @@ impl PyBPE {
                     }
                     "end_of_word_suffix" => builder = builder.end_of_word_suffix(value.extract()?),
                     "fuse_unk" => builder = builder.fuse_unk(value.extract()?),
+                    "byte_fallback" => builder = builder.byte_fallback(value.extract()?),
                     _ => println!("Ignored unknown kwarg option {}", key),
                 };
             }
@@ -384,9 +387,22 @@ impl PyBPE {
         setter!(self_, BPE, fuse_unk, fuse_unk);
     }
 
+    #[getter]
+    fn get_byte_fallback(self_: PyRef<Self>) -> bool {
+        getter!(self_, BPE, byte_fallback)
+    }
+
+    #[setter]
+    fn set_byte_fallback(self_: PyRef<Self>, byte_fallback: bool) {
+        setter!(self_, BPE, byte_fallback, byte_fallback);
+    }
+
     #[new]
-    #[args(kwargs = "**")]
+    #[pyo3(
+        signature = (vocab=None, merges=None, **kwargs),
+        text_signature = "(self, vocab=None, merges=None, cache_capacity=None, dropout=None, unk_token=None, continuing_subword_prefix=None, end_of_word_suffix=None, fuse_unk=None, byte_fallback=False)")]
     fn new(
+        py: Python<'_>,
         vocab: Option<PyVocab>,
         merges: Option<PyMerges>,
         kwargs: Option<&PyDict>,
@@ -405,6 +421,7 @@ impl PyBPE {
                 }
                 (PyVocab::Filename(vocab_filename), PyMerges::Filename(merges_filename)) => {
                     deprecation_warning(
+                    py,
                     "0.9.0",
                     "BPE.__init__ will not create from files anymore, try `BPE.from_file` instead",
                 )?;
@@ -470,7 +487,7 @@ impl PyBPE {
     /// Returns:
     ///     :class:`~tokenizers.models.BPE`: An instance of BPE loaded from these files
     #[classmethod]
-    #[args(kwargs = "**")]
+    #[pyo3(signature = (vocab, merges, **kwargs))]
     #[pyo3(text_signature = "(cls, vocab, merge, **kwargs)")]
     fn from_file(
         _cls: &PyType,
@@ -485,6 +502,7 @@ impl PyBPE {
         Py::new(
             py,
             PyBPE::new(
+                py,
                 Some(PyVocab::Vocab(vocab)),
                 Some(PyMerges::Merges(merges)),
                 kwargs,
@@ -505,7 +523,6 @@ impl PyBPE {
 ///     max_input_chars_per_word (:obj:`int`, `optional`):
 ///         The maximum number of characters to authorize in a single word.
 #[pyclass(extends=PyModel, module = "tokenizers.models", name = "WordPiece")]
-#[pyo3(text_signature = "(self, vocab, unk_token, max_input_chars_per_word)")]
 pub struct PyWordPiece {}
 
 impl PyWordPiece {
@@ -579,8 +596,12 @@ impl PyWordPiece {
     }
 
     #[new]
-    #[args(kwargs = "**")]
-    fn new(vocab: Option<PyVocab>, kwargs: Option<&PyDict>) -> PyResult<(Self, PyModel)> {
+    #[pyo3(signature = (vocab=None, **kwargs), text_signature = "(self, vocab, unk_token, max_input_chars_per_word)")]
+    fn new(
+        py: Python<'_>,
+        vocab: Option<PyVocab>,
+        kwargs: Option<&PyDict>,
+    ) -> PyResult<(Self, PyModel)> {
         let mut builder = WordPiece::builder();
 
         if let Some(vocab) = vocab {
@@ -590,6 +611,7 @@ impl PyWordPiece {
                 }
                 PyVocab::Filename(vocab_filename) => {
                     deprecation_warning(
+                        py,
                         "0.9.0",
                         "WordPiece.__init__ will not create from files anymore, try `WordPiece.from_file` instead",
                     )?;
@@ -640,7 +662,7 @@ impl PyWordPiece {
     /// Returns:
     ///     :class:`~tokenizers.models.WordPiece`: An instance of WordPiece loaded from file
     #[classmethod]
-    #[args(kwargs = "**")]
+    #[pyo3(signature = (vocab, **kwargs))]
     #[pyo3(text_signature = "(vocab, **kwargs)")]
     fn from_file(
         _cls: &PyType,
@@ -651,7 +673,10 @@ impl PyWordPiece {
         let vocab = WordPiece::read_file(vocab).map_err(|e| {
             exceptions::PyException::new_err(format!("Error while reading WordPiece file: {}", e))
         })?;
-        Py::new(py, PyWordPiece::new(Some(PyVocab::Vocab(vocab)), kwargs)?)
+        Py::new(
+            py,
+            PyWordPiece::new(py, Some(PyVocab::Vocab(vocab)), kwargs)?,
+        )
     }
 }
 
@@ -666,7 +691,6 @@ impl PyWordPiece {
 ///     unk_token (:obj:`str`, `optional`):
 ///         The unknown token to be used by the model.
 #[pyclass(extends=PyModel, module = "tokenizers.models", name = "WordLevel")]
-#[pyo3(text_signature = "(self, vocab, unk_token)")]
 pub struct PyWordLevel {}
 
 #[pymethods]
@@ -682,8 +706,12 @@ impl PyWordLevel {
     }
 
     #[new]
-    #[args(unk_token = "None")]
-    fn new(vocab: Option<PyVocab>, unk_token: Option<String>) -> PyResult<(Self, PyModel)> {
+    #[pyo3(signature = (vocab=None, unk_token = None), text_signature = "(self, vocab, unk_token)")]
+    fn new(
+        py: Python<'_>,
+        vocab: Option<PyVocab>,
+        unk_token: Option<String>,
+    ) -> PyResult<(Self, PyModel)> {
         let mut builder = WordLevel::builder();
 
         if let Some(vocab) = vocab {
@@ -693,6 +721,7 @@ impl PyWordLevel {
                 }
                 PyVocab::Filename(vocab_filename) => {
                     deprecation_warning(
+                        py,
                         "0.9.0",
                         "WordLevel.__init__ will not create from files anymore, \
                             try `WordLevel.from_file` instead",
@@ -752,7 +781,7 @@ impl PyWordLevel {
     /// Returns:
     ///     :class:`~tokenizers.models.WordLevel`: An instance of WordLevel loaded from file
     #[classmethod]
-    #[args(unk_token = "None")]
+    #[pyo3(signature = (vocab, unk_token = None))]
     #[pyo3(text_signature = "(vocab, unk_token)")]
     fn from_file(
         _cls: &PyType,
@@ -765,7 +794,7 @@ impl PyWordLevel {
         })?;
         Py::new(
             py,
-            PyWordLevel::new(Some(PyVocab::Vocab(vocab)), unk_token)?,
+            PyWordLevel::new(py, Some(PyVocab::Vocab(vocab)), unk_token)?,
         )
     }
 }
@@ -773,29 +802,48 @@ impl PyWordLevel {
 /// An implementation of the Unigram algorithm
 ///
 /// Args:
-///     vocab (:obj:`List[Tuple[str, float]]`, `optional`):
+///     vocab (:obj:`List[Tuple[str, float]]`, `optional`, `optional`):
 ///         A list of vocabulary items and their relative score [("am", -0.2442),...]
 #[pyclass(extends=PyModel, module = "tokenizers.models", name = "Unigram")]
-#[pyo3(text_signature = "(self, vocab)")]
 pub struct PyUnigram {}
 
 #[pymethods]
 impl PyUnigram {
     #[new]
-    fn new(vocab: Option<Vec<(String, f64)>>, unk_id: Option<usize>) -> PyResult<(Self, PyModel)> {
-        match (vocab, unk_id) {
-            (Some(vocab), unk_id) => {
-                let model = Unigram::from(vocab, unk_id).map_err(|e| {
-                    exceptions::PyException::new_err(format!("Error while loading Unigram: {}", e))
-                })?;
+    #[pyo3(text_signature = "(self, vocab, unk_id, byte_fallback)")]
+    fn new(
+        vocab: Option<Vec<(String, f64)>>,
+        unk_id: Option<usize>,
+        byte_fallback: Option<bool>,
+    ) -> PyResult<(Self, PyModel)> {
+        match (vocab, unk_id, byte_fallback) {
+            (Some(vocab), unk_id, byte_fallback) => {
+                let model =
+                    Unigram::from(vocab, unk_id, byte_fallback.unwrap_or(false)).map_err(|e| {
+                        exceptions::PyException::new_err(format!(
+                            "Error while loading Unigram: {}",
+                            e
+                        ))
+                    })?;
                 Ok((PyUnigram {}, model.into()))
             }
-            (None, None) => Ok((PyUnigram {}, Unigram::default().into())),
+            (None, None, _) => Ok((PyUnigram {}, Unigram::default().into())),
             _ => Err(exceptions::PyValueError::new_err(
                 "`vocab` and `unk_id` must be both specified",
             )),
         }
     }
+}
+
+/// Models Module
+#[pymodule]
+pub fn models(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<PyModel>()?;
+    m.add_class::<PyBPE>()?;
+    m.add_class::<PyWordPiece>()?;
+    m.add_class::<PyWordLevel>()?;
+    m.add_class::<PyUnigram>()?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -807,13 +855,11 @@ mod test {
 
     #[test]
     fn get_subtype() {
-        let py_model = PyModel::from(BPE::default());
-        let py_bpe = py_model.get_as_subtype().unwrap();
-        let gil = Python::acquire_gil();
-        assert_eq!(
-            "BPE",
-            py_bpe.as_ref(gil.python()).get_type().name().unwrap()
-        );
+        Python::with_gil(|py| {
+            let py_model = PyModel::from(BPE::default());
+            let py_bpe = py_model.get_as_subtype(py).unwrap();
+            assert_eq!("BPE", py_bpe.as_ref(py).get_type().name().unwrap());
+        })
     }
 
     #[test]

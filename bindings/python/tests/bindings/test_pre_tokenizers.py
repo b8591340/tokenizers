@@ -1,20 +1,21 @@
-import pytest
-import pickle
 import json
+import pickle
+
+import pytest
 
 from tokenizers.pre_tokenizers import (
-    PreTokenizer,
-    ByteLevel,
-    Whitespace,
-    WhitespaceSplit,
     BertPreTokenizer,
-    Metaspace,
+    ByteLevel,
     CharDelimiterSplit,
+    Digits,
+    Metaspace,
+    PreTokenizer,
     Punctuation,
     Sequence,
-    Digits,
-    UnicodeScripts,
     Split,
+    UnicodeScripts,
+    Whitespace,
+    WhitespaceSplit,
 )
 
 
@@ -109,6 +110,8 @@ class TestMetaspace:
         assert pretok.replacement == "%"
         pretok.add_prefix_space = True
         assert pretok.add_prefix_space == True
+        pretok.prepend_scheme = "never"
+        assert pretok.prepend_scheme == "never"
 
 
 class TestCharDelimiterSplit:

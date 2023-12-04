@@ -3,7 +3,7 @@ name: Python
 on:
   push:
     branches:
-      - master
+      - main
     paths-ignore:
       - bindings/node/**
   pull_request:
@@ -19,7 +19,7 @@ jobs:
         python: ["3.7", "3.8", "3.9", "3.10"]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v1
+        uses: actions/checkout@v3
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
@@ -51,10 +51,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-18.04, macos-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v1
+        uses: actions/checkout@v2
         
 
       - name: Install Rust
@@ -64,9 +64,9 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
-          python-version: 3.9
+          python-version: 3.11
           architecture: "x64"
 
 
@@ -95,6 +95,12 @@ jobs:
           command: clippy
           args: --manifest-path ./bindings/python/Cargo.toml --all-targets --all-features -- -D warnings
 
+      - name: Run Audit
+        uses: actions-rs/cargo@v1
+        with:
+          command: audit
+          args: -D warnings -f ./bindings/python/Cargo.lock
+
       - name: Install
         working-directory: ./bindings/python
         run: |
@@ -102,13 +108,12 @@ jobs:
           source .env/bin/activate
           pip install -U pip
           pip install pytest requests setuptools_rust numpy pyarrow datasets
-          python setup.py develop
+          pip install -e .[dev]
 
       - name: Check style
         working-directory: ./bindings/python
         run: |
           source .env/bin/activate
-          pip install black==20.8b1 click==8.0.4
           make check-style
 
       - name: Run tests

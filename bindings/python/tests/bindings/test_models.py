@@ -1,9 +1,10 @@
-import pytest
 import pickle
 
-from ..utils import data_dir, roberta_files, bert_files
+import pytest
 
-from tokenizers.models import Model, BPE, WordPiece, WordLevel
+from tokenizers.models import BPE, Model, WordLevel, WordPiece
+
+from ..utils import bert_files, data_dir, roberta_files
 
 
 class TestBPE:
@@ -53,6 +54,7 @@ class TestBPE:
         assert model.continuing_subword_prefix == "__prefix__"
         assert model.end_of_word_suffix == "__suffix__"
         assert model.fuse_unk == False
+        assert model.byte_fallback == False
 
         # Modify these
         model.dropout = 0.1
@@ -65,6 +67,8 @@ class TestBPE:
         assert model.end_of_word_suffix == "suff"
         model.fuse_unk = True
         assert model.fuse_unk == True
+        model.byte_fallback = True
+        assert model.byte_fallback == True
 
 
 class TestWordPiece:

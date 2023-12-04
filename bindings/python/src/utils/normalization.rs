@@ -200,6 +200,7 @@ pub struct PyNormalizedString {
 #[pymethods]
 impl PyNormalizedString {
     #[new]
+    #[pyo3(text_signature = None)]
     fn new(s: &str) -> Self {
         NormalizedString::from(s).into()
     }
@@ -318,7 +319,7 @@ impl PyNormalizedString {
     ///
     /// Args:
     ///     pattern: Pattern:
-    ///         A pattern used to split the string. Usually a string or a Regex
+    ///         A pattern used to split the string. Usually a string or a regex built with `tokenizers.Regex`
     ///
     ///     behavior: SplitDelimiterBehavior:
     ///         The behavior to use when splitting.

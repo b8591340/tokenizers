@@ -19,7 +19,7 @@ macro_rules! apply_signed {
 }
 
 /// The possible offsets referential
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OffsetReferential {
     Original,
     Normalized,
@@ -27,7 +27,7 @@ pub enum OffsetReferential {
 
 /// Represents a Range usable by the NormalizedString to index its content.
 /// A Range can use indices relative to either the `Original` or the `Normalized` string
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Range<T: RangeBounds<usize> + Clone> {
     Original(T),
     Normalized(T),
@@ -91,7 +91,7 @@ where
 ///  - MergedWithPrevious => `[ "the-", "final-", "-", "countdown" ]`
 ///  - MergedWithNext => `[ "the", "-final", "-", "-countdown" ]`
 ///  - Contiguous => `[ "the", "-", "final", "--", "countdown" ]`
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Eq)]
 pub enum SplitDelimiterBehavior {
     Removed,
     Isolated,
@@ -108,7 +108,7 @@ pub enum SplitDelimiterBehavior {
 /// It is possible to retrieve a part of the original string, by indexing it with
 /// offsets from the normalized one, and the other way around too. It is also
 /// possible to convert offsets from one referential to the other one easily.
-#[derive(Default, Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct NormalizedString {
     /// The original version of the string, before any modification
     original: String,
@@ -507,7 +507,7 @@ impl NormalizedString {
             let transformations = s
                 .chars()
                 .enumerate()
-                .map(|(i, c)| (c, if i == 0 { 0 } else { 1 }))
+                .map(|(i, c)| (c, isize::from(i != 0)))
                 .chain(std::iter::once((next, 1)));
 
             self.transform_range(Range::Normalized(0..next.len_utf8()), transformations, 0);
@@ -546,10 +546,10 @@ impl NormalizedString {
         let mut new_chars: Vec<(char, isize)> = vec![];
         self.for_each(|c| {
             c.to_lowercase().enumerate().for_each(|(index, c)| {
-                new_chars.push((c, if index > 0 { 1 } else { 0 }));
+                new_chars.push((c, isize::from(index > 0)));
             })
         });
-        self.transform(new_chars.into_iter(), 0);
+        self.transform(new_chars, 0);
         self
     }
 
@@ -558,10 +558,10 @@ impl NormalizedString {
         let mut new_chars: Vec<(char, isize)> = vec![];
         self.for_each(|c| {
             c.to_uppercase().enumerate().for_each(|(index, c)| {
-                new_chars.push((c, if index > 0 { 1 } else { 0 }));
+                new_chars.push((c, isize::from(index > 0)));
             })
         });
-        self.transform(new_chars.into_iter(), 0);
+        self.transform(new_chars, 0);
         self
     }
 
@@ -853,16 +853,8 @@ pub fn get_range_of<T: RangeBounds<usize>>(s: &str, range: T) -> Option<&str> {
     } else if start >= len || end > len || start >= end {
         None
     } else {
-        let start_b = s
-            .char_indices()
-            .map(|(i, _)| i)
-            .nth(start as usize)
-            .unwrap_or(0);
-        let end_b = s
-            .char_indices()
-            .map(|(i, _)| i)
-            .nth(end as usize)
-            .unwrap_or(s.len());
+        let start_b = s.char_indices().map(|(i, _)| i).nth(start).unwrap_or(0);
+        let end_b = s.char_indices().map(|(i, _)| i).nth(end).unwrap_or(s.len());
         Some(&s[start_b..end_b])
     }
 }
@@ -1136,8 +1128,7 @@ mod tests {
                 ('l', 0),
                 ('o', 0),
                 (' ', 1),
-            ]
-            .into_iter(),
+            ],
             0,
         );
 
