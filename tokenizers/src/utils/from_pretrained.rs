@@ -1,5 +1,5 @@
 use crate::Result;
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use hf_hub::{api::sync::ApiBuilder, Cache, Repo, RepoType};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -61,7 +61,12 @@ pub fn from_pretrained<S: AsRef<str>>(
         .into());
     }
 
-    let mut builder = ApiBuilder::new();
+    let mut builder = if let Some(path) = params.path {
+        ApiBuilder::from_cache(Cache::new(path.into()))
+    } else {
+        ApiBuilder::new()
+    };
+
     if let Some(token) = params.auth_token {
         builder = builder.with_token(Some(token));
     }
